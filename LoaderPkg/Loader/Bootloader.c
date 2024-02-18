@@ -84,8 +84,11 @@ InitGraphics (
   OUT LOADER_PARAMS  *LoaderParams
   )
 {
-  EFI_STATUS                    Status;
-  EFI_GRAPHICS_OUTPUT_PROTOCOL  *GraphicsOutput;
+  EFI_STATUS                              Status;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL            *GraphicsOutput;
+  UINTN                                   InfoGraphicSize;
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION    *GraphicModeInfo;
+  UINT32                                  ModesCount;
 
   ASSERT (LoaderParams != NULL);
 
@@ -104,16 +107,43 @@ InitGraphics (
     return Status;
   }
 
-  //
-  // LAB 1: Your code here.
-  //
-  // Switch to the maximum or any other resolution of your preference.
-  // Refer to Graphics Output Protocol description in UEFI spec for
-  // more details.
-  //
-  // Hint: Use QueryMode/SetMode functions.
-  //
-
+  ModesCount = GraphicsOutput->Mode->MaxMode;
+  for (UINT32 i = 0; i < ModesCount; ++i) {
+    GraphicsOutput->QueryMode(
+      GraphicsOutput,
+      i,
+      &InfoGraphicSize,
+      &GraphicModeInfo
+    );
+    DEBUG((
+      DEBUG_INFO | DEBUG_GCD, 
+      "JOS: Avaliable graphics mode is %ld, horizontal is %ld, vertical is %ld\n",
+      i,
+      GraphicModeInfo->HorizontalResolution,
+      GraphicModeInfo->VerticalResolution 
+    ));
+  }
+  if (ModesCount != 0) {
+    Status = GraphicsOutput->SetMode(
+      GraphicsOutput,
+      ModesCount - (UINT32)1
+    );
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "JOS: Cannot set up graphics mode - %r\n", Status));
+      return Status;
+    }
+    DEBUG ((
+      DEBUG_INFO, 
+      "JOS: Graphics mode %ld is setting up, horizontal is %ld, vertical is %ld\n",
+      ModesCount - (UINT32)1,
+      GraphicModeInfo->HorizontalResolution,
+      GraphicModeInfo->VerticalResolution 
+    ));
+  }
+  else {
+    DEBUG ((DEBUG_ERROR, "JOS: Cannot find graphics mode\n"));
+  }
+  
   //
   // Fill screen with black.
   //
@@ -987,7 +1017,7 @@ UefiMain (
   UINTN              EntryPoint;
   VOID               *GateData;
 
-#if 1 ///< Uncomment to await debugging
+#if 0 ///< Uncomment to await debugging
   volatile BOOLEAN   Connected;
   DEBUG ((DEBUG_INFO, "JOS: Awaiting debugger connection\n"));
 
