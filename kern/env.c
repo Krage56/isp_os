@@ -9,7 +9,6 @@
 
 #include <kern/env.h>
 #include <kern/trap.h>
->>>>>>> working-lab3
 #include <kern/monitor.h>
 #include <kern/sched.h>
 #include <kern/kdebug.h>
