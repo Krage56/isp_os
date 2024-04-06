@@ -115,13 +115,13 @@ InitGraphics (
       &InfoGraphicSize,
       &GraphicModeInfo
     );
-    DEBUG((
-      DEBUG_INFO, 
-      "JOS: Avaliable graphics mode is %ld, horizontal is %ld, vertical is %ld\n",
-      i,
-      GraphicModeInfo->HorizontalResolution,
-      GraphicModeInfo->VerticalResolution 
-    ));
+    // DEBUG((
+    //   DEBUG_INFO, 
+    //   "JOS: Avaliable graphics mode is %ld, horizontal is %ld, vertical is %ld\n",
+    //   i,
+    //   GraphicModeInfo->HorizontalResolution,
+    //   GraphicModeInfo->VerticalResolution 
+    // ));
   }
   if (ModesCount != 0) {
     Status = GraphicsOutput->SetMode(
