@@ -84,8 +84,11 @@ InitGraphics (
   OUT LOADER_PARAMS  *LoaderParams
   )
 {
-  EFI_STATUS                    Status;
-  EFI_GRAPHICS_OUTPUT_PROTOCOL  *GraphicsOutput;
+  EFI_STATUS                              Status;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL            *GraphicsOutput;
+  UINTN                                   InfoGraphicSize;
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION    *GraphicModeInfo;
+  UINT32                                  ModesCount;
 
   ASSERT (LoaderParams != NULL);
 
@@ -104,16 +107,43 @@ InitGraphics (
     return Status;
   }
 
-  //
-  // LAB 1: Your code here.
-  //
-  // Switch to the maximum or any other resolution of your preference.
-  // Refer to Graphics Output Protocol description in UEFI spec for
-  // more details.
-  //
-  // Hint: Use QueryMode/SetMode functions.
-  //
-
+  ModesCount = GraphicsOutput->Mode->MaxMode;
+  for (UINT32 i = 0; i < ModesCount; ++i) {
+    GraphicsOutput->QueryMode(
+      GraphicsOutput,
+      i,
+      &InfoGraphicSize,
+      &GraphicModeInfo
+    );
+    DEBUG((
+      DEBUG_INFO, 
+      "JOS: Avaliable graphics mode is %ld, horizontal is %ld, vertical is %ld\n",
+      i,
+      GraphicModeInfo->HorizontalResolution,
+      GraphicModeInfo->VerticalResolution 
+    ));
+  }
+  if (ModesCount != 0) {
+    Status = GraphicsOutput->SetMode(
+      GraphicsOutput,
+      ModesCount - (UINT32)1
+    );
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "JOS: Cannot set up graphics mode - %r\n", Status));
+      return Status;
+    }
+    DEBUG ((
+      DEBUG_INFO, 
+      "JOS: Graphics mode %ld is setting up, horizontal is %ld, vertical is %ld\n",
+      ModesCount - (UINT32)1,
+      GraphicModeInfo->HorizontalResolution,
+      GraphicModeInfo->VerticalResolution 
+    ));
+  }
+  else {
+    DEBUG ((DEBUG_ERROR, "JOS: Cannot find graphics mode\n"));
+  }
+  
   //
   // Fill screen with black.
   //
@@ -269,13 +299,16 @@ GetKernelFile (
 
   ASSERT (FileProtocol != NULL);
 
-  //
-  // Use gBS->HandleProtocol() to find loaded image protocol
-  // (use gEfiLoadedImageProtocolGuid) from gImageHandle to
-  // get loader's containing device.
-  //
-  // LAB 1: Your code here
-  (void)LoadedImage;
+  Status = gBS->HandleProtocol(
+    gImageHandle,    
+    &gEfiLoadedImageProtocolGuid,
+    (void**)(&LoadedImage)
+  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "JOS: Cannot load image protocol - %r\n", Status));
+    return Status;
+  }
+
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot find LoadedImage protocol - %r\n", Status));
@@ -287,24 +320,22 @@ GetKernelFile (
     return EFI_UNSUPPORTED;
   }
 
-  //
-  // Use gBS->HandleProtocol() to find file system protocol
-  // (use gEfiSimpleFileSystemProtocolGuid) from LoadedImage->DeviceHandle
-  // to read the kernel from it later.
-  //
-  // LAB 1: Your code here
-  (void)FileSystem;
+  Status = gBS->HandleProtocol(
+    LoadedImage->DeviceHandle,    
+    &gEfiSimpleFileSystemProtocolGuid,
+    (void**)(&FileSystem)
+  );
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot find own FileSystem protocol - %r\n", Status));
     return Status;
   }
 
-  //
-  // Use FileSystem->OpenVolume() to open root directory, in which kernel is stored
-  // NOTE: Don't forget to Use ->Close after you've done using it.
-  //
-  // LAB 1: Your code here
+  Status = FileSystem->OpenVolume(
+    FileSystem,
+    &CurrentDriveRoot
+  );
+  
   (void)CurrentDriveRoot;
 
   if (EFI_ERROR (Status)) {
@@ -312,19 +343,23 @@ GetKernelFile (
     return Status;
   }
 
-  //
-  // Use ->Open to open kernel file located at KERNEL_PATH
-  // for reading (as EFI_FILE_MODE_READ)
-  //
-  // LAB 1: Your code here
-  KernelFile = NULL;
+  Status = CurrentDriveRoot->Open(
+    CurrentDriveRoot,
+    &KernelFile,
+    KERNEL_PATH,
+    EFI_FILE_MODE_READ,
+    EFI_FILE_READ_ONLY
+  );
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "JOS: Cannot access own file system - %r\n", Status));
+    CurrentDriveRoot->Close(CurrentDriveRoot);
     return Status;
   }
 
   *FileProtocol = KernelFile;
+  CurrentDriveRoot->Close(CurrentDriveRoot);
+
   return EFI_SUCCESS;
 }
 
@@ -987,7 +1022,7 @@ UefiMain (
   UINTN              EntryPoint;
   VOID               *GateData;
 
-#if 1 ///< Uncomment to await debugging
+#if 0 ///< Uncomment to await debugging
   volatile BOOLEAN   Connected;
   DEBUG ((DEBUG_INFO, "JOS: Awaiting debugger connection\n"));
 
