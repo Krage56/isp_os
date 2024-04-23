@@ -14,8 +14,16 @@
 #include <kern/macro.h>
 #include <kern/traceopt.h>
 
+typedef unsigned long long int ull;
+
+#define ULL_ADD_OVERFLOW(a, b, res) \
+   __builtin_uaddll_overflow (a, b, &res)
+
+#define ULL_MUL_OVERFLOW(a, b, res) \
+  __builtin_umulll_overflow (a, b, &res)
+
 /* Currently active environment */
-struct Env *curenv = NULL;
+struct Env *curenv = NULL; // Указатель на текущий процесс
 
 #ifdef CONFIG_KSPACE
 /* All environments */
@@ -23,11 +31,13 @@ struct Env env_array[NENV];
 struct Env *envs = env_array;
 #else
 /* All environments */
-struct Env *envs = NULL;
+struct Env *envs = NULL; // Массив всех процессов, используемых и свободных
 #endif
 
 /* Free environment list
  * (linked by Env->env_link) */
+// Список свободных процессов; Сущности процессов в виде структурок указывают друг на дружку
+// по умолчанию NULL
 static struct Env *env_free_list;
 
 
@@ -85,16 +95,20 @@ envid2env(envid_t envid, struct Env **env_store, bool need_check_perm) {
  */
 void
 env_init(void) {
-
     /* Set up envs array */
     // LAB 3: Your code here
-    int i;
-    env_free_list = NULL;
-    for (i = 0; i < NENV; i++) {
-        envs[NENV - i - 1].env_status = ENV_FREE;
-        envs[NENV - i - 1].env_id = 0;
-        envs[NENV - i - 1].env_link = env_free_list;
-        env_free_list = &envs[NENV - i - 1];
+
+    envs->env_id = 0;
+    envs->env_status = ENV_FREE;
+    env_free_list = envs;
+
+    struct Env *next = env_free_list;
+    for (unsigned int i = 1; i < NENV; ++i) {
+        envs[i].env_id = 0;
+        envs[i].env_status = ENV_FREE;
+
+        next->env_link = envs + i;
+        next = envs + i;
     }
 }
 
@@ -153,7 +167,8 @@ env_alloc(struct Env **newenv_store, envid_t parent_id, enum EnvType type) {
 
     // LAB 3: Your code here:
     static uintptr_t stack_top = 0x2000000;
-    env->env_tf.tf_rsp = stack_top - (env - envs) * 2 * PAGE_SIZE;
+    // задаём уникальный адрес стека для процесса
+    env->env_tf.tf_rsp = stack_top - (env - envs) * (2 * PAGE_SIZE);
 #else
     env->env_tf.tf_ds = GD_UD | 3;
     env->env_tf.tf_es = GD_UD | 3;
@@ -166,8 +181,39 @@ env_alloc(struct Env **newenv_store, envid_t parent_id, enum EnvType type) {
     env_free_list = env->env_link;
     *newenv_store = env;
 
-    if (trace_envs) cprintf("[%08x] new env %08x\n", curenv ? curenv->env_id : 0, env->env_id);
+    if (trace_envs)
+        cprintf("[%08x] new env %08x\n", curenv ? curenv->env_id : 0, env->env_id);
     return 0;
+}
+
+/**
+ * выполняет поиск по таблице секций,
+ * перебирая каждый хэдер из таблицы,
+ * пытается 
+*/
+static int
+find_section(struct Secthdr *sc_hdr_tbl, char *sc_tbl_names, int sc_num, uint32_t type, const char *sc_name) {
+    struct Secthdr *section_hdr = NULL;
+    ull tmp_addr_saver = 0; // ull - unsigned long long int
+
+    for (int i = 0; i < sc_num; i++) {
+        // получаем указатель на заголовок из таблицы секций
+        section_hdr = sc_hdr_tbl + i;
+        
+        cprintf("section name = %s; needle = %s\n", (unsigned char *)(uintptr_t)(section_hdr->sh_name), sc_name);
+
+        if (ULL_ADD_OVERFLOW((ull)sc_tbl_names, offsetof(struct Secthdr, sh_type), tmp_addr_saver) ||
+            ULL_ADD_OVERFLOW((ull)sc_tbl_names, offsetof(struct Secthdr, sh_name), tmp_addr_saver))
+        {
+            panic("invalid access to section of table\n");
+            return -E_INVALID_EXE;
+        }
+        if (section_hdr->sh_type == type && !strcmp(sc_name, sc_tbl_names + section_hdr->sh_name))
+        {
+            return i;
+        }
+    }
+    return -E_UNSPECIFIED;
 }
 
 /* Pass the original ELF image to binary/size and bind all the symbols within
@@ -179,55 +225,148 @@ static int
 bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_start, uintptr_t image_end) {
     // LAB 3: Your code here:
 
-    /* NOTE: find_function from kdebug.c should be used */
+    /** @brief #рассуждения
+     * то есть у нас есть бинарь, есть процесс, у бинаря есть таблица символов (objdump -X elf)
+     * нам нужно в глобальные указатели на функции записать адреса
+     * одноименных функций ядра.
+     * 
+     * Для этого необходимо получить адреса глобальных переменных бинаря
+     * с конкретными названиями. ОК - пройдёмся по бинарю, по таблице символов.
+     * 
+     * Для каждого элемента из таблицы символов смотреть есть ли такая функция 
+     * в ядре (посредстовом find_function из kern/kdebug.c).
+     * Если да, то положить в указатель адрес функции. 
+    */
+    struct Elf *_binary = (struct Elf *)binary;
+    ull tmp_addr_saver = 0; // ull - unsigned long long int 
+    ull real_addr = 0;
 
-    int i, strtab = -1;
-    struct Elf *elf = (struct Elf *)binary;
-    struct Secthdr *sh = (struct Secthdr *)(binary + elf->e_shoff);
-    const char *sh_str = (char *)binary + sh[elf->e_shstrndx].sh_offset;
+    // проверка на невалидное значение смещения
+    // от начала elf до входа в таблицу заголовков секций
+    if (_binary->e_shoff == 0)
+    {
+        panic("invalid offset to section header table's\n");
+        return -E_INVALID_EXE;
+    }
+    long offset = offsetof(struct Elf, e_shoff);
+    bool overflow = ULL_ADD_OVERFLOW((ull)(binary), (ull)offset, tmp_addr_saver);
 
-    // for every member of section
-    for (i = 0; i < elf->e_shnum; ++i) {
-        // find the string table
-        if (sh[i].sh_type == ELF_SHT_STRTAB) {
-            // default string table
-            if (!strcmp(".strtab", sh_str + sh[i].sh_name)) {
-                strtab = i;
-                break;
+    // cprintf("Ovwerflow is %d, offset is %llu, tmd_addr_saver is %llu\n", overflow, (ull)offset, tmp_addr_saver);
+    // проверка валидного доступа к таблице секций
+    // if (overflow || size < tmp_addr_saver)
+    if (overflow || ULL_ADD_OVERFLOW((ull)binary, size, real_addr) || real_addr < tmp_addr_saver)
+    {
+        panic("binary file has big address, that gets a overflow\n");
+        return -E_INVALID_EXE;
+    }
+
+    // проверка, что таблица секций не вылезает за размер `_binary`
+    // ELF ... ... ... [] [] [] [*] ... ... ...
+    if (ULL_MUL_OVERFLOW(_binary->e_shnum, sizeof(struct Secthdr), tmp_addr_saver)      ||
+        ULL_ADD_OVERFLOW(offsetof(struct Elf, e_shoff), tmp_addr_saver, tmp_addr_saver) ||
+        ULL_ADD_OVERFLOW((ull)binary, size, real_addr) ||
+        real_addr < tmp_addr_saver)
+    {
+        panic("invalid try to access elements of section headers table's\n");
+        return -E_FAULT;
+    }
+
+    // получаем доступ до таблицы секций
+    struct Secthdr *section_headers_table = (struct Secthdr *)(binary + _binary->e_shoff);
+
+    // проверка по спецификации + проверка индекса в пределах
+    if (_binary->e_shstrndx == ELF_SHN_UNDEF ||
+        _binary->e_shstrndx >= _binary->e_shnum) {
+        panic("invalid index of section name string table !\n");
+        return -E_INVALID_EXE;
+    }
+
+    // проверяем, что доступ до таблицы строк разделов (секций) валиден. 
+    if (ULL_MUL_OVERFLOW(_binary->e_shstrndx, sizeof(struct Secthdr), tmp_addr_saver)         ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, (ull)section_headers_table, tmp_addr_saver)          ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, offsetof(struct Secthdr, sh_offset), tmp_addr_saver) ||
+        ULL_ADD_OVERFLOW((ull)binary, tmp_addr_saver, tmp_addr_saver)                         ||
+        ULL_ADD_OVERFLOW((ull)binary, size, real_addr))
+    {
+        panic("overflow after trying to access section name string table !\n");
+        return -E_FAULT;
+    }
+    // получаем доступ до таблицы строк с названиями секций
+    char *section_names_string_table = (char *)(binary + section_headers_table[_binary->e_shstrndx].sh_offset);
+
+    // индекс раздела (секции) ".strtab" - индекс таблицы строк (имена глоб. функций, переменных
+    // в таблице заголовков.
+
+    int strtab_section_idx = find_section(section_headers_table, section_names_string_table,
+                                          _binary->e_shnum, ELF_SHT_STRTAB, ".strtab");
+    if (strtab_section_idx == -E_UNSPECIFIED) {
+        panic("cannot find '.strtab' section!\n");
+        return -E_FAULT;
+    }
+    // индекс раздела (секции) ".symtab" - индекс таблицы символов в таблице заголовков.
+    int symtab_section_idx = find_section(section_headers_table, section_names_string_table,
+                                          _binary->e_shnum, ELF_SHT_SYMTAB, ".symtab");
+    if (symtab_section_idx == -E_UNSPECIFIED) {
+        panic("cannot find '.symtab' section!\n");
+        return -E_FAULT;
+    }
+    // зачем нужна таблица символов, если есть таблица строк ?
+    // потому что без таблицы символов, мы не найдём в таблице строк название функции, потому что в таблице символов
+    // по спецификации лежат индексы к таблице строк
+
+    // попытка доступа до содержимого ".strtab"
+    if (ULL_MUL_OVERFLOW(strtab_section_idx, sizeof(struct Secthdr), tmp_addr_saver)          ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, (ull)section_headers_table, tmp_addr_saver)          ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, offsetof(struct Secthdr, sh_offset), tmp_addr_saver) ||
+        ULL_ADD_OVERFLOW((ull)binary, tmp_addr_saver, tmp_addr_saver)                         ||
+        ULL_ADD_OVERFLOW((ull)binary, size, real_addr))
+    {
+        panic("invalid try to access to '.strtab' section\n");
+        return -E_FAULT;
+    }
+    char *names = (char *)(binary + section_headers_table[strtab_section_idx].sh_offset);
+
+    // попытка доступа до содержимого ".symtab"
+    if (ULL_MUL_OVERFLOW(symtab_section_idx, sizeof(struct Secthdr), tmp_addr_saver)           ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, (ull)section_headers_table, tmp_addr_saver)           ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, offsetof(struct Secthdr, sh_offset), tmp_addr_saver)  ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, (ull)binary, tmp_addr_saver)                          ||
+        ULL_ADD_OVERFLOW((ull)binary, size, real_addr))
+    {
+        panic("invalid try to access to '.symtab' section\n");
+        return -E_FAULT;
+    }
+
+    // получаем содержимое ".symtab" и получения числа записей в таблице символов
+    struct Elf64_Sym* symbols = (struct Elf64_Sym *)(binary + section_headers_table[symtab_section_idx].sh_offset);
+
+    // попытка доступа до числа записей
+    if (ULL_MUL_OVERFLOW(symtab_section_idx, sizeof(struct Secthdr), tmp_addr_saver)        ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, (ull)section_headers_table, tmp_addr_saver)        ||
+        ULL_ADD_OVERFLOW(tmp_addr_saver, offsetof(struct Secthdr, sh_size), tmp_addr_saver) ||
+        ULL_ADD_OVERFLOW((ull)binary, size, real_addr))
+    {
+        panic("invalid try to access to '.symtab' section\n");
+        return -E_FAULT;
+    }
+    size_t symbols_num = section_headers_table[symtab_section_idx].sh_size / sizeof(struct Elf64_Sym);
+
+    for (size_t symbol_num = 0; symbol_num < symbols_num; symbol_num++) {
+        if (ELF64_ST_BIND(symbols[symbol_num].st_info) == STB_GLOBAL &&
+            ELF64_ST_TYPE(symbols[symbol_num].st_info) == STT_OBJECT &&
+            symbols[symbol_num].st_size == sizeof(void *)) {
+
+            const char *name = names + symbols[symbol_num].st_name;
+            uintptr_t function_address = find_function(name);
+            if (function_address &&
+                symbols[symbol_num].st_value >= image_start &&
+                symbols[symbol_num].st_value <= image_end) {
+                memcpy((void *)symbols[symbol_num].st_value, &function_address, sizeof(void *));
             }
         }
     }
 
-    if (strtab < 0) {
-        panic("Can't find strtab!\n");
-        return 0;
-    }
-
-    const char *str = (char *)binary + sh[strtab].sh_offset;
-    for (int i = 0; i < elf->e_shnum; ++i) {
-        // symbol link table with functions etc of the section
-        if (sh[i].sh_type == ELF_SHT_SYMTAB) {
-            if (!strcmp(".symtab", sh_str + sh[i].sh_name)) {
-                struct Elf64_Sym *sym = (struct Elf64_Sym *)(binary + sh[i].sh_offset);
-                // number of names in table
-                int num_sym = sh[i].sh_size / sizeof(sym[0]);
-                int j;
-                for (j = 0; j < num_sym; ++j) {
-                    if (ELF64_ST_BIND(sym[j].st_info) == STB_GLOBAL &&
-                        ELF64_ST_TYPE(sym[j].st_info) == STT_OBJECT && sym[j].st_size == sizeof(void *)) {
-                        const char *name = str + sym[j].st_name;
-                        uintptr_t addr = find_function(name);
-                        if (addr) {
-                            if (sym[j].st_value >= image_start && sym[j].st_value <= image_end) {
-                                memcpy((void *)sym[j].st_value, &addr, sizeof(void *));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return 0;
+    return E_NO_ENT;
 }
 
 /* Set up the initial program binary, stack, and processor flags
@@ -243,13 +382,14 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
  * but not actually present in the ELF file - i.e., the program's bss section.
  *
  * All this is very similar to what our boot loader does, except the boot
- * loader also needs to read the code from disk.  Take a look at
+ * loader also needs to read the code from disk. Take a look at
  * LoaderPkg/Loader/Bootloader.c to get ideas.
  *
  * Finally, this function maps one page for the program's initial stack.
  *
  * load_icode returns -E_INVALID_EXE if it encounters problems.
- *  - How might load_icode fail?  What might be wrong with the given input?
+ *  - How might load_icode fail ? 
+ *  - What might be wrong with the given input ?
  *
  * Hints:
  *   Load each program segment into memory
@@ -274,35 +414,42 @@ static int
 load_icode(struct Env *env, uint8_t *binary, size_t size) {
     // LAB 3: Your code here
     struct Elf *elf = (struct Elf *)binary;
-    // ELF checking
-    if (elf->e_magic == ELF_MAGIC) {
-        // Getting programm's header from binary with offset e_phoff
-        struct Proghdr *ph = (struct Proghdr *)(binary + elf->e_phoff);
 
-        // Getting number of entries in header table
-        int phnum = (int)elf->e_phnum;
-        for (int i = 0; i < phnum; ++i) {
-            // If the segment is loadable
-            if (ph[i].p_type == ELF_PROG_LOAD) {
-                // p_vaddr - first byte in virtual? memory
-                // filesz - size of image
-                // offset - the offset from the beginning of the file at which the first byte of the segment resides
-                memcpy(
-                        (void *)ph[i].p_va,
-                        binary + ph[i].p_offset,
-                        ph[i].p_filesz);
-                // bss initialization
-                memset(
-                        (void *)ph[i].p_va + ph[i].p_filesz,
-                        0,
-                        ph[i].p_memsz - ph[i].p_filesz);
-            }
-        }
-
-        env->env_tf.tf_rip = elf->e_entry;
-        bind_functions(env, binary, size, elf->e_entry, elf->e_entry + size);
+    /* сигнатурная проверка исполняемого файла */
+    if (elf->e_magic != ELF_MAGIC                  ||
+        elf->e_shentsize != sizeof(struct Secthdr) ||
+        elf->e_phentsize != sizeof(struct Proghdr) ||
+        elf->e_shstrndx >= elf->e_shnum)
+    {
+        panic("signatures check of ELF failed !\n");
+        return -E_INVALID_EXE;
     }
-    return 0;
+
+    // число заголовков программы
+    int i = 0;
+    int phnum = elf->e_phnum;
+    // ph - содержит адрес таблицы заголовков программы
+    struct Proghdr *phs = (struct Proghdr *)(binary + elf->e_phoff);
+    if (phs == 0) {
+        return -E_INVALID_EXE;
+    }
+    for (; i < phnum; ++i) {
+        // загружаем только те сегменты, что могут быть загружены -- .text (cs), .data (ds), ...
+        if ((phs + i)->p_type == ELF_PROG_LOAD) {
+            // загружаем адрес очередного сегмента
+            memcpy((void *)phs[i].p_va, binary + phs[i].p_offset, phs[i].p_filesz);
+            // зануляем всё, что идёт после сегмента
+            memset((void *)phs[i].p_va + phs[i].p_filesz, 0, phs[i].p_memsz - phs[i].p_filesz);
+        }
+    }
+    // загружаем точку входа в ELF-файл (для его исполнения).
+    // e_entry - куда система передаст управление, таким образом запуская процесс
+    // env->env_tf - должны лежать сохранённые регистры для безопасного 
+    //               переключения между процессами. 
+    env->env_tf.tf_rip = elf->e_entry;
+    // выполняем связывание, чтобы они пользовательские программы могли использовать
+    // функции ядра
+    return bind_functions(env, binary, size, elf->e_entry, elf->e_entry + size);
 }
 
 /* Allocates a new env with env_alloc, loads the named elf
@@ -314,21 +461,25 @@ load_icode(struct Env *env, uint8_t *binary, size_t size) {
 void
 env_create(uint8_t *binary, size_t size, enum EnvType type) {
     // LAB 3: Your code here
-    struct Env *current_env;
-    int res = env_alloc(&current_env, 0, type);
-    if (res != 0) {
-        panic("Can't allocate new environment, error code is %i\n", res);
+    struct Env *new;
+    // создали новый процесс, точнее, взяли свободный из свободных,
+    // проинициализировали его поля, задали нач. значения регистрам.
+    if (env_alloc(&new, 0, type) < 0) {
+        panic("Can't allocate new environment\n");
     }
-    load_icode(current_env, binary, size);
+    // связываем бинарь с процессом, который будет его выполнять
+    if (0 > load_icode(new, binary, size)) {
+        panic("Can't load and bind process with binary\n");
+    }
 }
-
 
 /* Frees env and all memory it uses */
 void
 env_free(struct Env *env) {
 
     /* Note the environment's demise. */
-    if (trace_envs) cprintf("[%08x] free env %08x\n", curenv ? curenv->env_id : 0, env->env_id);
+    if (trace_envs)
+        cprintf("[%08x] free env %08x\n", curenv ? curenv->env_id : 0, env->env_id);
 
     /* Return the environment to the free list */
     env->env_status = ENV_FREE;
@@ -374,7 +525,6 @@ csys_yield(struct Trapframe *tf) {
  *
  * This function does not return.
  */
-
 _Noreturn void
 env_pop_tf(struct Trapframe *tf) {
 
@@ -385,8 +535,6 @@ env_pop_tf(struct Trapframe *tf) {
     tf->tf_rsp -= sizeof(uintptr_t);
     *((uintptr_t *)tf->tf_rsp) = tf->tf_rflags;
 
-    // Restoring the context motherfucker
-    // and then get the rip
     asm volatile(
             "movq %0, %%rsp\n"
             "movq 0(%%rsp), %%r15\n"
@@ -446,17 +594,14 @@ env_run(struct Env *env) {
     }
 
     // LAB 3: Your code here
-    // RUNNING -> RUNNABLE
-    if (curenv) {
-        if (curenv->env_status == ENV_RUNNING) {
-            curenv->env_status = ENV_RUNNABLE;
-        }
+
+    if (curenv && curenv->env_status == ENV_RUNNING) {
+        curenv->env_status = ENV_RUNNABLE;
     }
+
     curenv = env;
     curenv->env_status = ENV_RUNNING;
-    curenv->env_runs += 1;
-    env_pop_tf(&(curenv->env_tf));
+    curenv->env_runs++;
 
-    while (1)
-        ;
+    env_pop_tf(&curenv->env_tf);
 }
