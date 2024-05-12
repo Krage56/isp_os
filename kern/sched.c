@@ -25,9 +25,27 @@ sched_yield(void) {
      * below to halt the cpu */
 
     // LAB 3: Your code here:
-    env_run(&envs[0]);
-
-    cprintf("Halt\n");
+    int current, parent;
+    if (curenv) {
+        current = ENVX(curenv->env_id);
+    } else {
+        current = 0;
+    }
+    parent = current;
+    while (1) {
+        current = (current + 1) % NENV;
+        if (envs[current].env_status == ENV_RUNNABLE) {
+            env_run(&envs[current]);
+        }
+        // if there is only 1 process and it is not runnable
+        if (parent == current) {
+            if (envs[current].env_status == ENV_RUNNING) {
+                env_run(&envs[current]);
+            }
+            break;
+        }
+    }
+    // cprintf("Halt\n");
 
     /* No runnable environments,
      * so just halt the cpu */
