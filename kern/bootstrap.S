@@ -67,7 +67,7 @@ _head64:
 
     # Update CR3 register
     leaq pml4(%rip), %rax
-    movq %rax, %cr3
+    ; movq %rax, %cr3
 
     # Transition to high mem entry code and pass LoadParams address
     movabs $entry, %rax
