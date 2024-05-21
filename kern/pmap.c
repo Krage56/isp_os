@@ -32,7 +32,7 @@ static size_t free_desc_count;
 size_t max_memory_map_addr;
 /* Kernel address space */
 struct AddressSpace kspace;
-/* Currently active address spcae */
+/* Currently active address space */
 struct AddressSpace *current_space;
 /* Root node of physical memory tree */
 struct Page root;
@@ -283,6 +283,11 @@ page_lookup(struct Page *hint, uintptr_t addr, int class, enum PageState type, b
     return node;
 }
 
+/**
+ * Функция для управления ссылкой на страницу физического дерева.
+ * Используется для управления выделением физической памяти.
+ * Ссылемся на лист.
+*/
 static void
 page_ref(struct Page *node) {
     if (!node) return;
@@ -292,13 +297,21 @@ page_ref(struct Page *node) {
      * so need to reference them recursively
      * when refc transitions from 0 to 1 */
     if (!node->refc++) {
+        // обновляем значение ноды
         list_del((struct List *)node);
         list_init((struct List *)node);
+        // получается мы будем ссылаться на
+        // дочерние элементы узла столько раз, сколько
+        // элементов со счётчиком ссылок, равным 0.
         page_ref(node->left);
         page_ref(node->right);
     }
 }
 
+/**
+ * Функция для управления ссылкой на страницу физического дерева.
+ * Используется для управления выделением физической памяти.
+*/
 static void
 page_unref(struct Page *page) {
     if (!page) return;
@@ -394,12 +407,10 @@ page_lookup_virtual(struct Page *node, uintptr_t addr, int class, int alloc) {
     assert(class >= 0);
     assert_virtual(node);
 
-
     int nclass = MAX_CLASS;
     while (nclass > class) {
         assert(nclass > 0);
         bool right = addr & CLASS_SIZE(nclass - 1);
-
 
         struct Page **next = right ? &node->right : &node->left;
 
@@ -639,6 +650,15 @@ check_virtual_tree(struct Page *page, int class) {
 void
 dump_virtual_tree(struct Page *node, int class) {
     // LAB 7: Your code here
+    if ((node->state & NODE_TYPE_MASK) == MAPPING_NODE) {
+        cprintf("MAPPING_NODE: phy: %p, class: %d\n", (void *)PTE_ADDR(node->phy->addr), class);
+    }
+    if (node->left) {
+        dump_virtual_tree(node->left, class - 1);
+    }
+    if (node->right) {
+        dump_virtual_tree(node->right, class - 1);
+    }
 }
 
 void
@@ -677,17 +697,62 @@ dump_memory_lists(void) {
  */
 void
 dump_page_table(pte_t *pml4) {
-    uintptr_t addr = 0;
     cprintf("Page table:\n");
     // LAB 7: Your code here
-    (void)addr;
-}
+    // для всех PML4E (Page Map Level 4 Entry) из PML4
+    for (size_t i = NUSERPML4; i < PML4_ENTRY_COUNT; ++i) {
+        // pdp - page direcotry pointer
+        pdpe_t *pdp = (pdpe_t *)KADDR(PTE_ADDR(pml4[i]));
+        // Для всех элементов PDPE из PDP
+        for (size_t j = 0; i < PDP_ENTRY_COUNT; ++j) {
+            if (!(pdp[j] & PTE_P)) {
+                continue;
+            }
+            else if (pdp[j] & PTE_PS) {
+                dump_entry(pdp[j], 1 * GB, 0);
+                continue;
+            }
 
+            // pd - page directory
+            pde_t *pd = (pde_t *)KADDR(PTE_ADDR(pdp[j]));
+            // для всех элементов pde из директории таблиц
+            for (size_t k = 0; k < PD_ENTRY_COUNT; ++k) {
+                if (pd[k] & PTE_PS) {
+                    // каждая директория таблиц занимает 2МБ
+                    dump_entry(pd[k], 2 * MB, 0);
+                    continue;
+                }
+                if (!(pd[k] & PTE_P)) {
+                    continue;
+                }
+                // pt - page table
+                pte_t *pt = (pte_t *)KADDR(PTE_ADDR(pd[k]));
+                // для всех страниц из таблицы страниц
+                for (size_t ii = 0; ii < PT_ENTRY_COUNT; ++ii) {
+                    if (!(pt[ii] & PTE_P)) {
+                        continue;
+                    }
+                    // печатаем адрес страницы, а также её права
+                    dump_entry(pt[ii], 4 * KB, 0);
+                }
+            }
+        }
+    }
+    }
+
+/**
+ * алоцируем страницу памяти размером 0x40000 =
+ * = 262144, преобразуя указатель на значение физического адреса,
+ * соотвествующего данной странице.
+*/
 inline static int
 alloc_pt(pte_t *dst) {
     if (!(*dst & PTE_P) || (*dst & PTE_PS)) {
         struct Page *page = alloc_page(0, ALLOC_BOOTMEM);
-        if (!page) return -E_NO_MEM;
+        if (page == NULL) {
+            cprintf("unable to alloc page !\n");
+            return -E_NO_MEM;
+        }
 #ifdef SANITIZE_SHADOW_BASE
         assert(page2pa(page) + CLASS_SIZE(page->class) <= BOOT_MEM_SIZE);
 #endif
@@ -818,6 +883,11 @@ tlb_invalidate_range(struct AddressSpace *spc, uintptr_t start, uintptr_t end) {
     }
 }
 
+/**
+ * Убирает отображение (из дерева страниц ядра и из
+ * аппаратной таблицы страниц) виртуальной страницы на
+ * адресное пространство, переданном в качестве аргумента.
+*/
 static void
 unmap_page(struct AddressSpace *spc, uintptr_t addr, int class) {
     if (trace_memory) cprintf("<%p> Unmapping [%08lX, %08lX]\n",
@@ -933,6 +1003,11 @@ finish:
     tlb_invalidate_range(spc, inval_start, inval_end);
 }
 
+/**
+ * Добавляет отображение (в дерево страниц ядра (struct Page *root) и на
+ * аппаратную таблицу страниц (pml4e_t *pml4) виртуальной страницу в
+ * адресном пространстве, переданном в качестве аргумента.
+*/
 static int
 map_page(struct AddressSpace *spc, uintptr_t addr, struct Page *page, int flags) {
     assert(!(flags & PROT_LAZY) | !(flags & PROT_SHARE));
@@ -977,8 +1052,10 @@ map_page(struct AddressSpace *spc, uintptr_t addr, struct Page *page, int flags)
 
     /* Allocate empty pdp if required */
     if (!(spc->pml4[pml4i0] & PTE_P)) {
-        if (alloc_pt(spc->pml4 + pml4i0) < 0)
+        if (alloc_pt(spc->pml4 + pml4i0) != 0) {
+            cprintf("unable to alloc pt\n");
             return -E_NO_MEM;
+        }
 
         if (pml4i0 >= NUSERPML4)
             propagate_pml4(spc);
@@ -1089,7 +1166,9 @@ unmap_region(struct AddressSpace *dspace, uintptr_t dst, uintptr_t size) {
     }
 }
 
-/* Just allocate page, without mapping it */
+/**
+ * функция выделения физических страниц.
+*/
 static struct Page *
 alloc_page(int class, int flags) {
     struct List *li = NULL;
@@ -1107,9 +1186,11 @@ alloc_page(int class, int flags) {
             peer = (struct Page *)li;
             assert(peer->state == ALLOCATABLE_NODE);
             assert_physical(peer);
-            if (!(flags & ALLOC_BOOTMEM) || page2pa(peer) + CLASS_SIZE(class) < BOOT_MEM_SIZE) goto found;
+            if (!(flags & ALLOC_BOOTMEM) || page2pa(peer) + CLASS_SIZE(class) < BOOT_MEM_SIZE)
+                goto found;
         }
     }
+    cprintf("RETURN NULL =(\n");
     return NULL;
 
 found:
@@ -1123,7 +1204,7 @@ found:
 
         struct PagePool *newpool = KADDR(page2pa(peer));
 #ifdef SANITIZE_SHADOW_BASE
-        /* Need to unpoison early to initialize lists in-place */
+        /* Need to unpoison early to initiallize lists inplace */
         if (current_space) platform_asan_unpoison(newpool, CLASS_SIZE(class));
 #endif
         ndesc = POOL_ENTRIES_FOR_SIZE(CLASS_SIZE(class));
@@ -1181,6 +1262,20 @@ addr_common_class(uintptr_t addr1, uintptr_t addr2) {
     return res;
 }
 
+/**
+ * @brief
+ * Делим адресное пространство, придавая каждой странице,
+ * права, чтобы пользовательские процессы не могли залесть
+ * в память ядра и испортить его данные, а также, чтобы
+ * эти процессы были изолированы
+ *
+ * @param dst адресное пространство ядра
+ * @param dstart виртуальный адрес, с которого начинают делить адресное пр-во
+ *  на страницы и выдавать им права
+ * @param pstart физический адрес
+ * @param size размер отображаемой памяти
+ * @param flags флаги доступа к памяти
+*/
 int
 map_physical_region(struct AddressSpace *dst, uintptr_t dstart, uintptr_t pstart, size_t size, int flags) {
     if (trace_memory) cprintf("Mapping physical region [%08lX, %08lX] to [%08lX, %08lX] (flags=%x)\n",
@@ -1205,11 +1300,20 @@ map_physical_region(struct AddressSpace *dst, uintptr_t dstart, uintptr_t pstart
         if (start & CLASS_SIZE(class)) {
             struct Page *page = page_lookup(NULL, pstart, class, PARTIAL_NODE, 1);
             if (flags & MAP_USER_MMIO) {
-                if (!page) return -E_NO_MEM;
-                if (page->refc) return -E_NO_ENT;
+                if (!page) {
+                    cprintf("[1] unsuccessfull try to alloc new page by physical address\n");
+                    return -E_NO_MEM;
+                }
+                if (page->refc) {
+                    cprintf("[1] page is dirty\n");
+                    return -E_NO_ENT;
+                }
             }
             assert(page);
-            if ((res = map_page(dst, start, page, flags)) < 0) return res;
+            if ((res = map_page(dst, start, page, flags)) < 0) {
+                cprintf("[1] invalid trying to mapping page into tree\n");
+                return res;
+            }
             start += CLASS_SIZE(class);
             pstart += CLASS_SIZE(class);
         }
@@ -1219,11 +1323,20 @@ map_physical_region(struct AddressSpace *dst, uintptr_t dstart, uintptr_t pstart
         while (start + CLASS_SIZE(class) <= end) {
             struct Page *page = page_lookup(NULL, pstart, class, PARTIAL_NODE, 1);
             if (flags & MAP_USER_MMIO) {
-                if (!page) return -E_NO_MEM;
-                if (page->refc) return -E_NO_ENT;
+                if (!page) {
+                    cprintf("[2] unsuccessfull try to alloc new page by physical address\n");
+                    return -E_NO_MEM;
+                }
+                if (page->refc) {
+                    cprintf("[2] page is dirty\n");
+                    return -E_NO_ENT;
+                }
             }
             assert(page);
-            if ((res = map_page(dst, start, page, flags)) < 0) return res;
+            if ((res = map_page(dst, start, page, flags)) < 0) {
+                cprintf("[2] invalid trying to mapping page into tree\n");
+                return res;
+            }
             assert_virtual(dst->root);
             start += CLASS_SIZE(class);
             pstart += CLASS_SIZE(class);
@@ -1875,8 +1988,7 @@ init_memory(void) {
     efer |= EFER_NXE;
     wrmsr(EFER_MSR, efer);
 
-    for (size_t i = 0; i < CLASS_SIZE(MAX_ALLOCATION_CLASS); i++)
-        assert(!zero_page_raw[i]);
+    for (size_t i = 0; i < CLASS_SIZE(MAX_ALLOCATION_CLASS); i++) assert(!zero_page_raw[i]);
 
     switch_address_space(&kspace);
 
@@ -1884,7 +1996,7 @@ init_memory(void) {
     nosan_memset(one_page_raw, 0xFF, CLASS_SIZE(MAX_ALLOCATION_CLASS));
 
     /* Perform global constructor initialisation (e.g. asan)
-     * This must be done as early as possible */
+    * This must be done as early as possible */
     extern void (*__ctors_start)();
     extern void (*__ctors_end)();
     void (**ctor)() = &__ctors_start;
@@ -1894,7 +2006,7 @@ init_memory(void) {
     unpoison_meta(&root);
 #endif
 
-    /* Traps needs to be initialized here
+    /* Traps needs to be initiallized here
      * to alloc #PF to be handled during lazy allocation */
     trap_init();
 
