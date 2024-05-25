@@ -12,6 +12,7 @@
 #include <inc/x86.h>
 
 #define CLASS_BASE    12
+// если c = 0, то 1 << 12 = 4 KB.
 #define CLASS_SIZE(c) (1ULL << ((c) + CLASS_BASE))
 #define CLASS_MASK(c) (CLASS_SIZE(c) - 1)
 
@@ -80,9 +81,13 @@ enum PageState {
 extern __attribute__((aligned(HUGE_PAGE_SIZE))) uint8_t zero_page_raw[HUGE_PAGE_SIZE];
 extern __attribute__((aligned(HUGE_PAGE_SIZE))) uint8_t one_page_raw[HUGE_PAGE_SIZE];
 
+// наша страница занимает 4 Кб - 4096 байт. (x32)
 struct Page {
+    // Структура список - для процессов
     struct List head; /* This should be first member */
+    // левая страница, правая, родительская
     struct Page *left, *right, *parent;
+    // состояние текущей страницы
     enum PageState state;
     union {
         struct /* physical page */ {

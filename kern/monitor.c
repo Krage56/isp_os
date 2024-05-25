@@ -17,6 +17,7 @@
 #include <kern/env.h>
 #include <kern/pmap.h>
 #include <kern/trap.h>
+#include <kern/monitor.h>
 
 #define WHITESPACE "\t\r\n "
 #define MAXARGS    16
