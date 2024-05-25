@@ -171,10 +171,11 @@ free_desc_rec(struct Page *p) {
     }
 }
 
-/*
+/**
+ * @brief
  * This function allocates child
  * node for given parent in physical memory tree
- * right indicated whether left or right child should
+ * @param right indicated whether left or right child should
  * be allocated.
  *
  * New child describes lower (for the left one)
@@ -185,7 +186,7 @@ free_desc_rec(struct Page *p) {
  * NOTE: Be careful with overflows
  * NOTE: Child node should have it's
  * reference counter to be equal either 0 or 1
- * depending on whether parent's refc is 0 or non-zero,
+ * depending on whether parent's `refc` is 0 or non-zero,
  * correspondingly.
  * HINT: Use alloc_descriptor() here
  */
@@ -701,6 +702,12 @@ init_memory(void) {
     if (trace_init) cprintf("Memory allocator is initialized\n");
 
     detect_memory();
+    struct Page *p = alloc_page(0, ALLOC_POOL), *old = NULL;
+     while(p) {
+        old = p;
+        p = alloc_page(0, ALLOC_POOL);
+    }
+    page_unref(old);
     check_physical_tree(&root);
     if (trace_init) cprintf("Physical memory tree is correct\n");
 }
