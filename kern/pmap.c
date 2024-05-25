@@ -1900,18 +1900,10 @@ init_shadow_pre(void) {
 
 void
 init_memory(void) {
-    int res = -1;
-
     init_allocator();
     if (trace_init) cprintf("Memory allocator is initialized\n");
 
     detect_memory();
-    struct Page *p = alloc_page(0, ALLOC_POOL), *old = NULL;
-     while(p) {
-        old = p;
-        p = alloc_page(0, ALLOC_POOL);
-    }
-    page_unref(old);
     check_physical_tree(&root);
     if (trace_init) cprintf("Physical memory tree is correct\n");
 
@@ -2067,11 +2059,6 @@ init_memory(void) {
         panic("Cannot map physical region at %p of size %zd", 
                 (void *)PADDR(pfstack),(size_t) (PADDR(pfstacktop) - PADDR(pfstack)));
     }
-    assert(!res);
-    assert(!res);
-    assert(!res);
-    assert(!res);
-    assert(!res);
 
     if (trace_memory_more) dump_page_table(kspace.pml4);
 

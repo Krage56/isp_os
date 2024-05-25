@@ -91,9 +91,11 @@ struct Page {
     enum PageState state;
     union {
         struct /* physical page */ {
-            /* Number of references
-             * Child nodes always have class
-             * smaller by 1 than their parents */
+            /**
+             * счетчик ссылок должен быть равен 0 или 1
+             * в зависимости от того, равен ли родительский `refc`
+             * 0 или не нулю соответственно.
+            */
             uint32_t refc;
             uintptr_t class : CLASS_BASE;                        /* = log2(size)-CLASS_BASE */
             uintptr_t addr : sizeof(uintptr_t) * 8 - CLASS_BASE; /* = address >> CLASS_BASE */
@@ -134,10 +136,14 @@ extern struct Page root;
 extern char bootstacktop[], bootstack[];
 extern size_t max_memory_map_addr;
 
-/* This macro takes a kernel virtual address -- an address that points above
+/**
+ * @brief
+ * This macro takes a kernel virtual address -- an address that points above
  * KERN_BASE_ADDR, where the machine's maximum 512MB of physical memory is mapped --
  * and returns the corresponding physical address.  It panics if you pass it a
- * non-kernel virtual address. */
+ * non-kernel virtual address.
+ * ru: Принимает виртуальный, а возвращает физический
+*/
 #define PADDR(kva) _paddr(__FILE__, __LINE__, kva)
 
 static inline physaddr_t
@@ -147,8 +153,12 @@ _paddr(const char *file, int line, void *kva) {
     return (physaddr_t)kva - KERN_BASE_ADDR;
 }
 
-/* This macro takes a physical address and returns the corresponding kernel
- * virtual address.  It panics if you pass an invalid physical address. */
+/**
+ * @brief
+ * Принимает физический адрес, возвращает виртуальный адрес.
+ * Нужно для того, чтобы обращаться к физическим адресам, предварительно преобразовав
+ * их в виртуальные. Потому что MMU всегда выполняет трансляцию адресов.
+ */
 #define KADDR(pa) _kaddr(__FILE__, __LINE__, pa)
 /* CAUTION: use only before page detection! */
 #define _KADDR_NOCHECK(pa) (void *)((physaddr_t)pa + KERN_BASE_ADDR)
