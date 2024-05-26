@@ -106,10 +106,10 @@
 /* At IOPHYSMEM (640K) there is a 384K hole for I/O.  From the kernel,
  * IOPHYSMEM can be addressed at KERN_BASE_ADDR + IOPHYSMEM.  The hole ends
  * at physical address EXTPHYSMEM. */
-#define IOPHYSMEM  0x0A0000
-#define EXTPHYSMEM 0x100000
+#define IOPHYSMEM  0x0A0000 // 655'360 byte I/O Physical memory
+#define EXTPHYSMEM 0x100000 // 1'048'576 bytes of EXTENSION Physical memory
 
-/* Amount of memory mapped by entrypgdir */
+/* Amount of memory mapped by entrypgdir - 1 ГБ физической памяти */
 #define BOOT_MEM_SIZE (1024 * 1024 * 1024ULL)
 
 /* Kernel stack */

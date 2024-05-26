@@ -36,7 +36,7 @@
 /* Page directory and page table constants */
 
 #define PAGE_SHIFT 12
-#define PAGE_SIZE  (1LL << PAGE_SHIFT) /* Bytes mapped by a page */
+#define PAGE_SIZE  (1LL << PAGE_SHIFT) /* Bytes mapped by a page = 2^12 = 4096 */
 
 #define PT_ENTRY_COUNT   512 /* Page table entries per page table */
 #define PT_ENTRY_SHIFT   9
