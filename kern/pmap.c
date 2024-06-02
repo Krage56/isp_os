@@ -705,7 +705,7 @@ dump_page_table(pte_t *pml4) {
         // pdp - page direcotry pointer
         pdpe_t *pdp = (pdpe_t *)KADDR(PTE_ADDR(pml4[i]));
         // Для всех элементов PDPE из PDP
-        for (size_t j = 0; i < PDP_ENTRY_COUNT; ++j) {
+        for (size_t j = 0; j < PDP_ENTRY_COUNT; ++j) {
             if (!(pdp[j] & PTE_P)) {
                 continue;
             }
