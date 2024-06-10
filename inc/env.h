@@ -51,8 +51,17 @@ struct List {
 };
 
 struct AddressSpace {
-    pml4e_t *pml4;     /* Virtual address of pml4 */
-    uintptr_t cr3;     /* Physical address of pml4 */
+    /**
+     * аппаратная таблица страниц
+    */
+    pml4e_t *pml4;     /* Virtual address of pml4 - таблица страниц */
+    uintptr_t cr3;     /* Physical address of pml4 - энтрипоинт в таблицу страниц*/
+    /**
+     * Дерево, описывающее отображение виртуальных страниц на адреса.
+     * Листья содержат ссылки на виртуальные страницы физической памяти,
+     * отображённые на соотвествующие физические адреса.
+     * Есть MAPPING_NODE (конечная нода), есть INTERMEDIATE_NODE
+    */
     struct Page *root; /* root node of address space tree */
 };
 
