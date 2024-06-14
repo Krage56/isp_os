@@ -75,6 +75,20 @@ acpi_enable(void) {
         ;
 }
 
+static int corrupted = 0;
+
+static void
+checksum(void *addr, uintptr_t size, const char *msg) {
+    int checksum = 0;
+    for (int i = 0; i < size; ++i) {
+        checksum += ((uint8_t *)addr)[i];
+    }
+    if (checksum & 0xFF) {
+        corrupted = 1;
+        panic("%s\n", msg);
+    }
+}
+
 static void *
 acpi_find_table(const char *sign) {
     /*
@@ -90,6 +104,54 @@ acpi_find_table(const char *sign) {
      * HINT: You may want to distunguish RSDT/XSDT
      */
     // LAB 5: Your code here:
+    static RSDP *rsdp = NULL;
+
+    if (corrupted) {
+        cprintf("acpi_find_table(): Error: Checksum is invalid\n");
+        panic("acpi_find_table(): Corrupted checksum\n");
+    }
+
+    if (!rsdp) {
+        if (!uefi_lp->ACPIRoot) {
+            panic("No RSDP\n");
+        }
+        rsdp = mmio_map_region((physaddr_t)uefi_lp->ACPIRoot, sizeof(RSDP));
+        if (rsdp->Revision) {
+            rsdp = mmio_remap_last_region((physaddr_t)uefi_lp->ACPIRoot, rsdp, sizeof(RSDP), rsdp->Length);
+            checksum(rsdp, rsdp->Length, "XSDP Checksum corrupted");
+        } else {
+            checksum(rsdp, offsetof(RSDP, Length), "RSDP Checksum corrupted");
+        }
+    }
+
+    static RSDT *rsdt = NULL;
+    static uint32_t rsdt_len;
+    static uint64_t size;
+
+    if (!rsdt) {
+        if (rsdp->Revision) {
+            rsdt = mmio_map_region((physaddr_t)rsdp->XsdtAddress, sizeof(RSDT));
+            rsdt = mmio_remap_last_region((physaddr_t)rsdp->XsdtAddress, rsdt, sizeof(RSDT), rsdt->h.Length);
+            size = 8;
+        } else {
+            rsdt = mmio_map_region((physaddr_t)rsdp->RsdtAddress, sizeof(RSDT));
+            rsdt = mmio_remap_last_region((physaddr_t)rsdp->RsdtAddress, rsdt, sizeof(RSDT), rsdt->h.Length);
+            size = 4;
+        }
+        rsdt_len = (rsdt->h.Length - sizeof(RSDT)) / size;
+        checksum(rsdt, rsdt->h.Length, "SDT checksum corrupted");
+    }
+
+    for (int i = 0; i < rsdt_len; ++i) {
+        physaddr_t addr;
+        memcpy(&addr, (uint8_t *)rsdt->PointerToOtherSDT + i * size, size);
+        ACPISDTHeader *header = mmio_map_region(addr, sizeof(ACPISDTHeader));
+        header = mmio_remap_last_region(addr, header, sizeof(ACPISDTHeader), header->Length);
+        checksum(header, header->Length, "ACPI checksum corrupted");
+        if (!strncmp(header->Signature, sign, sizeof(header->Signature))) {
+            return header;
+        }
+    }
 
     return NULL;
 }
@@ -176,8 +238,7 @@ get_fadt(void) {
     // (use acpi_find_table)
     // HINT: ACPI table signatures are
     //       not always as their names
-
-    return NULL;
+    return acpi_find_table("FACP");
 }
 
 /* Obtain and map RSDP ACPI table address. */
@@ -185,8 +246,7 @@ HPET *
 get_hpet(void) {
     // LAB 5: Your code here
     // (use acpi_find_table)
-
-    return NULL;
+    return acpi_find_table("HPET");
 }
 
 /* Getting physical HPET timer address from its table. */
@@ -287,11 +347,23 @@ hpet_get_main_cnt(void) {
 void
 hpet_enable_interrupts_tim0(void) {
     // LAB 5: Your code here
+    hpetReg->GEN_CONF |= HPET_LEG_RT_CNF;
+    hpetReg->MAIN_CNT = 0;
+    hpetReg->TIM0_CONF = (IRQ_TIMER << 9);
+    hpetReg->TIM0_CONF |= HPET_TN_TYPE_CNF | HPET_TN_INT_ENB_CNF | HPET_TN_VAL_SET_CNF;
+    hpetReg->TIM0_COMP = Peta / 2 / hpetFemto;
+    pic_irq_unmask(IRQ_TIMER);
 }
 
 void
 hpet_enable_interrupts_tim1(void) {
     // LAB 5: Your code here
+    hpetReg->GEN_CONF |= HPET_LEG_RT_CNF;
+    hpetReg->MAIN_CNT = 0;
+    hpetReg->TIM1_CONF = (IRQ_CLOCK << 9);
+    hpetReg->TIM1_CONF |= HPET_TN_TYPE_CNF | HPET_TN_INT_ENB_CNF | HPET_TN_VAL_SET_CNF;
+    hpetReg->TIM1_COMP = 3 * Peta / 2 / hpetFemto;
+    pic_irq_unmask(IRQ_CLOCK);
 }
 
 void
@@ -312,6 +384,14 @@ hpet_cpu_frequency(void) {
     static uint64_t cpu_freq;
 
     // LAB 5: Your code here
+    const uint64_t fraction = 10;
+    uint64_t cnt = hpet_get_main_cnt();
+    uint64_t tsc = read_tsc();
+    uint64_t delta = hpetFreq / fraction;
+    while (hpet_get_main_cnt() - cnt < delta) {
+        asm volatile("pause");
+    }
+    cpu_freq = (read_tsc() - tsc) * fraction;
 
     return cpu_freq;
 }
@@ -330,6 +410,20 @@ pmtimer_cpu_frequency(void) {
     static uint64_t cpu_freq;
 
     // LAB 5: Your code here
+    const uint64_t fraction = 10;
+    uint32_t pm_cnt = pmtimer_get_timeval();
+    uint64_t tsc = read_tsc();
+    uint32_t current_pm_cnt = pm_cnt;
+    uint64_t d = 0;
+    uint64_t delta = PM_FREQ / fraction;
+    while (d < delta) {
+        current_pm_cnt = pmtimer_get_timeval();
+        d = current_pm_cnt - pm_cnt;
+        if (pm_cnt - current_pm_cnt <= 0xFFFFFF) {
+            d += 0xFFFFFF;
+        }
+    }
+    cpu_freq = (read_tsc() - tsc) * fraction;
 
     return cpu_freq;
 }

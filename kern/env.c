@@ -95,14 +95,25 @@ env_init(void) {
      * Don't forget about rounding.
      * kzalloc_region() only works with current_space != NULL */
     // LAB 8: Your code here
+    envs = (struct Env *)kzalloc_region(sizeof(*envs) * NENV);
+    memset(envs, 0, sizeof(*envs) * NENV);
 
     /* Map envs to UENVS read-only,
      * but user-accessible (with PROT_USER_ set) */
     // LAB 8: Your code here
+    if (map_region(current_space, UENVS, &kspace, (uintptr_t)envs, UENVS_SIZE, PROT_R | PROT_USER_))
+        panic("Cannot map physical region at %p of size %zd", envs, (size_t)UENVS_SIZE);
 
     /* Set up envs array */
 
     // LAB 3: Your code here
+    env_free_list = NULL;
+    for (int i = 0; i < NENV; ++i) {
+        envs[NENV - i - 1].env_id = 0;
+        envs[NENV - i - 1].env_status = ENV_FREE;
+        envs[NENV - i - 1].env_link = env_free_list;
+        env_free_list = &envs[NENV - i - 1];
+    }
 }
 
 /* Allocates and initializes a new environment.
@@ -163,7 +174,8 @@ env_alloc(struct Env **newenv_store, envid_t parent_id, enum EnvType type) {
     env->env_tf.tf_cs = GD_KT;
 
     // LAB 3: Your code here:
-    // static uintptr_t stack_top = 0x2000000;
+    static uintptr_t stack_top = 0x2000000;
+    env->env_tf.tf_rsp = stack_top - (env - envs) * 2 * PAGE_SIZE;
 #else
     env->env_tf.tf_ds = GD_UD | 3;
     env->env_tf.tf_es = GD_UD | 3;
@@ -199,6 +211,38 @@ bind_functions(struct Env *env, uint8_t *binary, size_t size, uintptr_t image_st
     // LAB 3: Your code here:
 
     /* NOTE: find_function from kdebug.c should be used */
+    int strtab = -1;
+    struct Elf *elf = (struct Elf *)binary;
+    struct Secthdr *sh = (struct Secthdr *)(binary + elf->e_shoff);
+    const char *shstr  = (char *)binary + sh[elf->e_shstrndx].sh_offset;
+
+    for (int i = 0; i < elf->e_shnum; ++i) {
+        if (sh[i].sh_type == ELF_SHT_STRTAB && !strcmp(".strtab", shstr + sh[i].sh_name)) {
+            strtab = i;
+            break;
+        }
+    }
+
+    if (strtab < 0) {
+        panic("Can't find strtab!\n");
+        return 0;
+    }
+
+    for (int i = 0; i < elf->e_shnum; ++i) {
+        if (sh[i].sh_type == ELF_SHT_SYMTAB && !strcmp(".symtab", shstr + sh[i].sh_name)) {
+            struct Elf64_Sym *sym = (struct Elf64_Sym *)(binary + sh[i].sh_offset);
+            for (int j = 0; j < sh[i].sh_size / sizeof(sym[0]); j++) {
+                if (ELF64_ST_BIND(sym[j].st_info) == STB_GLOBAL &&
+                        ELF64_ST_TYPE(sym[j].st_info) == STT_OBJECT && sym[j].st_size == sizeof(void *)) {
+                    const char *name = (char *)elf + sh[strtab].sh_offset + sym[j].st_name;
+                    uintptr_t addr = find_function(name);
+                    if (addr && sym[j].st_value >= image_start && sym[j].st_value <= image_end) {
+                        memcpy((void *)sym[j].st_value, &addr, sizeof(void *));
+                    }
+                }
+            }
+        }
+    }
 
     return 0;
 }
@@ -247,6 +291,38 @@ static int
 load_icode(struct Env *env, uint8_t *binary, size_t size) {
     // LAB 3: Your code here
     // LAB 8: Your code here
+    struct Elf *elf = (struct Elf *) binary;
+    struct Proghdr *ph = (struct Proghdr *)((uintptr_t)elf + elf->e_phoff);
+    int res;
+
+    if (elf->e_magic != ELF_MAGIC) {
+        return -E_INVALID_EXE;
+    }
+
+    switch_address_space(&env->address_space);
+    for (int i = 0; i < elf->e_phnum; ++i) {
+        if (ph[i].p_type != ELF_PROG_LOAD) {
+            continue;
+        }
+
+        if (ph[i].p_memsz < ph[i].p_filesz) {
+            switch_address_space(&kspace);
+            return -E_INVALID_EXE;
+        }
+
+        uintptr_t first_page = ROUNDDOWN(ph[i].p_va, PAGE_SIZE);
+        uintptr_t last_page = ROUNDUP(ph[i].p_va + ph[i].p_memsz, PAGE_SIZE);
+        res = map_region(&env->address_space, first_page, NULL, 0, last_page - first_page, PROT_R | PROT_W | PROT_X | PROT_USER_ | ALLOC_ZERO);
+        assert(!res);
+
+        memcpy((void *)ph[i].p_va, binary + ph[i].p_offset, ph[i].p_filesz);
+        memset((void *)ph[i].p_va + ph[i].p_filesz, 0, ph[i].p_memsz - ph[i].p_filesz);
+    }
+    res = map_region(&env->address_space, USER_STACK_TOP - USER_STACK_SIZE, NULL, 0, USER_STACK_SIZE, PROT_R | PROT_W | PROT_USER_ | ALLOC_ZERO);
+    assert(!res);
+    switch_address_space(&kspace);
+    env->env_tf.tf_rip = elf->e_entry;
+    bind_functions(env, binary, size, elf->e_entry, elf->e_entry + size);
 
     /* NOTE: When merging origin/lab10 put this hunk at the end
      *       of the function, when user stack is already mapped. */
@@ -272,8 +348,14 @@ env_create(uint8_t *binary, size_t size, enum EnvType type) {
     // LAB 3: Your code here
     // LAB 8: Your code here
     // LAB 10: Your code here
+    struct Env *new;
+    if (env_alloc(&new, 0, type) < 0) {
+        panic("Can't allocate new environment\n");
+    }
+    new->binary = binary;
+    int res = load_icode(new, binary, size);
+    assert(!res);
 }
-
 
 /* Frees env and all memory it uses */
 void
@@ -312,10 +394,16 @@ env_destroy(struct Env *env) {
 
     // LAB 3: Your code here
     // LAB 10: Your code here
+    env->env_status = ENV_DYING;
+    env_free(env);
+    if (curenv == env) {
+        sched_yield();
+    }
 
     /* Reset in_page_fault flags in case *current* environment
      * is getting destroyed after performing invalid memory access. */
     // LAB 8: Your code here
+    in_page_fault = 0;
 }
 
 #ifdef CONFIG_KSPACE
@@ -400,6 +488,15 @@ env_run(struct Env *env) {
 
     // LAB 3: Your code here
     // LAB 8: Your code here
+    if (curenv && curenv->env_status == ENV_RUNNING) {
+        curenv->env_status = ENV_RUNNABLE;
+    }
+
+    curenv = env;
+    curenv->env_status = ENV_RUNNING;
+    curenv->env_runs++;
+    switch_address_space(&curenv->address_space);
+    env_pop_tf(&curenv->env_tf);
 
     while (1)
         ;
