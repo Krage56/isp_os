@@ -347,7 +347,6 @@ void
 env_create(uint8_t *binary, size_t size, enum EnvType type) {
     // LAB 3: Your code here
     // LAB 8: Your code here
-    // LAB 10: Your code here
     struct Env *new;
     if (env_alloc(&new, 0, type) < 0) {
         panic("Can't allocate new environment\n");
@@ -355,6 +354,11 @@ env_create(uint8_t *binary, size_t size, enum EnvType type) {
     new->binary = binary;
     int res = load_icode(new, binary, size);
     assert(!res);
+    // LAB 10: Your code here
+    if (type == ENV_TYPE_FS)
+        new->env_tf.tf_rflags |= FL_IOPL_3;
+    
+    return;
 }
 
 /* Frees env and all memory it uses */
@@ -394,11 +398,9 @@ env_destroy(struct Env *env) {
 
     // LAB 3: Your code here
     // LAB 10: Your code here
-    env->env_status = ENV_DYING;
     env_free(env);
-    if (curenv == env) {
+    if (env == curenv)
         sched_yield();
-    }
 
     /* Reset in_page_fault flags in case *current* environment
      * is getting destroyed after performing invalid memory access. */
