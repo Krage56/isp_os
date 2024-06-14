@@ -20,17 +20,14 @@
 static int
 sys_cputs(const char *s, size_t len) {
     // LAB 8: Your code here
+    user_mem_assert(curenv, s, len, PROT_USER_);
+    char kern_buf[len];
+    nosan_memcpy((void*)kern_buf, (void*)s, len);
+    cprintf("%.*s", (int)len, kern_buf);
 
     /* Check that the user has permission to read memory [s, s+len).
      * Destroy the environment if not. */
-    #ifdef SANITIZE_SHADOW_BASE
-        platform_asan_unpoison((void *)src, len);
-    #endif
-        user_mem_assert(curenv, s, len, PROT_USER_);
-        cprintf("%.*s", (int)len, s);
-    #ifdef SANITIZE_SHADOW_BASE
-        platform_asan_poison((void *)s, len);
-    #endif
+
     return 0;
 }
 
@@ -39,7 +36,6 @@ sys_cputs(const char *s, size_t len) {
 static int
 sys_cgetc(void) {
     // LAB 8: Your code here
-
     return cons_getc();
 }
 
@@ -47,7 +43,6 @@ sys_cgetc(void) {
 static envid_t
 sys_getenvid(void) {
     // LAB 8: Your code here
-
     return curenv->env_id;
 }
 
@@ -60,15 +55,20 @@ static int
 sys_env_destroy(envid_t envid) {
     // LAB 8: Your code here.
     struct Env *env;
-    if (envid2env(envid, &env, true) < 0) {
-        return -E_BAD_ENV;
-    }
+    int res;
+    res = envid2env(envid, &env, 1);
+    if (res < 0)
+        return res;
+
+#if 1 /* TIP: Use this snippet to log required for passing grade tests info */
     if (trace_envs) {
         cprintf(env == curenv ?
                         "[%08x] exiting gracefully\n" :
                         "[%08x] destroying %08x\n",
                 curenv->env_id, env->env_id);
     }
+#endif
+
     env_destroy(env);
 
     return 0;
@@ -94,16 +94,17 @@ sys_exofork(void) {
      * will appear to return 0. */
 
     // LAB 9: Your code here
-    struct Env* result = NULL;
-    int res = env_alloc(&result, curenv->env_id, ENV_TYPE_USER);
-    if (res < 0) {
-        return res;
+    struct Env *result = NULL;
+    int errc = env_alloc(&result, curenv->env_id, ENV_TYPE_USER);
+    if (errc < 0) {
+        cprintf("ERROR:%s: env_alloc failed with code %d\n", __func__, errc);
+        return errc;
     }
+
     result->env_status = ENV_NOT_RUNNABLE;
     result->env_tf = curenv->env_tf;
-    result->env_pgfault_upcall = curenv->env_pgfault_upcall;
-
     result->env_tf.tf_regs.reg_rax = 0;
+
     return result->env_id;
 }
 
@@ -123,15 +124,21 @@ sys_env_set_status(envid_t envid, int status) {
      * envid's status. */
 
     // LAB 9: Your code here
+
     struct Env* result = NULL;
-    int res = envid2env(envid, &result, true);
-    if (res < 0) {
-        return res;
+    int errc = envid2env(envid, &result, true);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
-    if (status != ENV_NOT_RUNNABLE && status != ENV_RUNNABLE) {
+
+    if (status != ENV_RUNNABLE && status != ENV_NOT_RUNNABLE) {
+        cprintf("ERROR:%s: must be ENV_RUNNABLE or ENV_NOT_RUNNABLE\n", __func__);
         return -E_INVAL;
     }
+
     result->env_status = status;
+
     return 0;
 }
 
@@ -147,10 +154,12 @@ static int
 sys_env_set_pgfault_upcall(envid_t envid, void *func) {
     // LAB 9: Your code here:
     struct Env* result = NULL;
-    int res = envid2env(envid, &result, true);
-    if (res < 0) {
-        return res;
+    int errc = envid2env(envid, &result, true);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
+
     result->env_pgfault_upcall = func;
     return 0;
 }
@@ -182,23 +191,21 @@ static int
 sys_alloc_region(envid_t envid, uintptr_t addr, size_t size, int perm) {
     // LAB 9: Your code here:
     struct Env* result = NULL;
-    int res = envid2env(envid, &result, true);
-    if (res < 0) {
-        return res;
+    int errc = envid2env(envid, &result, true);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
-    if (addr >= MAX_USER_ADDRESS  || PAGE_OFFSET(addr)) {
+
+    if (addr >= MAX_USER_ADDRESS || PAGE_OFFSET(addr)) {
+        cprintf("ERROR:%s: va >= MAX_USER_ADDRESS, or va is not page-aligned\n", __func__);
         return -E_INVAL;
     }
-    if (perm & ALLOC_ONE) {
-        perm &= ~ALLOC_ZERO;
-    } 
-    else {
-        perm |= ALLOC_ZERO;
-        perm &= ~ALLOC_ONE;
-    }
-    res = map_region(&result->address_space, addr, NULL, 0, size, perm | PROT_USER_ | PROT_LAZY);
-    if (res < 0) {
-        cprintf("map region: %i  addr: %ld size %ld\n", res, addr, size);
+
+    perm = (perm & ALLOC_ONE) ? perm & ~ALLOC_ZERO : perm | ALLOC_ZERO;
+    errc = map_region(&result->address_space, addr, NULL, 0, size, perm | PROT_USER_ | PROT_LAZY);
+    if (errc < 0) {
+        cprintf("ERROR:%s: map region: %i addr: %ld size %ld\n", __func__, errc, addr, size);
         return -E_NO_MEM;
     }
     return 0;
@@ -230,26 +237,34 @@ sys_map_region(envid_t srcenvid, uintptr_t srcva,
     // LAB 9: Your code here
     struct Env* src_env = NULL;
     struct Env* dst_env = NULL;
-    int res = envid2env(srcenvid, &src_env, true);
-    if (res < 0) {
-        return res;
+    int errc = envid2env(srcenvid, &src_env, true);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
-    res = envid2env(dstenvid, &dst_env, true);
-    if (res < 0) {
-        return res;
+
+    errc = envid2env(dstenvid, &dst_env, true);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
-    if (srcva >= MAX_USER_ADDRESS  || PAGE_OFFSET(srcva)) {
+
+    if (srcva >= MAX_USER_ADDRESS || PAGE_OFFSET(srcva)) {
+        cprintf("ERROR:%s: srcva >= MAX_USER_ADDRESS, or srcva is not page-aligned\n", __func__);
         return -E_INVAL;
     }
-    if (dstva >= MAX_USER_ADDRESS  || PAGE_OFFSET(dstva)) {
+
+    if (dstva >= MAX_USER_ADDRESS || PAGE_OFFSET(dstva)) {
+        cprintf("ERROR:%s: dstva >= MAX_USER_ADDRESS, or dstva is not page-aligned\n", __func__);
         return -E_INVAL;
     }
- 
-    res = map_region(&dst_env->address_space, dstva, &src_env->address_space, srcva, size, perm | PROT_USER_);
-    if (res < 0) {
-        cprintf("sys_map_region -> map_regin failed: %i\n", res);
+
+    errc = map_region(&dst_env->address_space, dstva, &src_env->address_space, srcva, size, perm | PROT_USER_);
+    if (errc < 0) {
+        cprintf("ERROR:%s: map region: %i addr: %ld size %ld\n", __func__, errc, dstva, size);
         return -E_NO_MEM;
     }
+
     return 0;
 }
 
@@ -266,14 +281,19 @@ sys_unmap_region(envid_t envid, uintptr_t va, size_t size) {
 
     // LAB 9: Your code here
     struct Env* result = NULL;
-    int res = envid2env(envid, &result, true);
-    if (res < 0) {
-        return res;
+    int errc = envid2env(envid, &result, true);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
-    if (va >= MAX_USER_ADDRESS  || PAGE_OFFSET(va)) {
+
+    if (va >= MAX_USER_ADDRESS || PAGE_OFFSET(va)) {
+        cprintf("ERROR:%s: va >= MAX_USER_ADDRESS, or va is not page-aligned\n", __func__);
         return -E_INVAL;
     }
+
     unmap_region(&result->address_space, va, size);
+
     return 0;
 }
 
@@ -343,28 +363,37 @@ sys_map_physical_region(uintptr_t pa, envid_t envid, uintptr_t va, size_t size, 
 static int
 sys_ipc_try_send(envid_t envid, uint32_t value, uintptr_t srcva, size_t size, int perm) {
     // LAB 9: Your code here
-
     struct Env* to_env = NULL;
-    if (envid2env(envid, &to_env, false) < 0) {
-        return -1;
+    int errc = envid2env(envid, &to_env, false);
+    if (errc < 0) {
+        cprintf("ERROR:%s: envid2env failed with code %d\n", __func__, errc);
+        return errc;
     }
+
     if (to_env->env_ipc_recving == false) {
+        cprintf("ERROR:%s: envid is not currently blocked in sys_ipc_recv\n", __func__);
         return -E_IPC_NOT_RECV;
     }
-    if (srcva < MAX_USER_ADDRESS && to_env->env_ipc_dstva < MAX_USER_ADDRESS) {
-        if (PAGE_OFFSET(srcva) || PAGE_OFFSET(to_env->env_ipc_dstva)) {
+
+    if (srcva < MAX_USER_ADDRESS) {
+        if (PAGE_OFFSET(srcva)) {
+            cprintf("ERROR:%s: srcva < MAX_USER_ADDRESS but srcva is not page-aligned\n", __func__);
             return -E_INVAL;
         }
-        if (map_region(&to_env->address_space, to_env->env_ipc_dstva, &curenv->address_space, srcva, PAGE_SIZE, perm | PROT_USER_) < 0) {
-            return -1;
+
+        errc = map_region(&to_env->address_space, to_env->env_ipc_dstva, &curenv->address_space, srcva, PAGE_SIZE, perm | PROT_USER_);
+        if (errc < 0) {
+            cprintf("ERROR:%s: map region: %i addr: %ld size %ld\n", __func__, errc, to_env->env_ipc_dstva, (size_t)PAGE_SIZE);
+            return errc;
         }
+
         to_env->env_ipc_maxsz = MIN(size, to_env->env_ipc_maxsz);
         to_env->env_ipc_perm = perm;
-
     } else {
         to_env->env_ipc_perm = 0;
     }
-    to_env->env_ipc_recving = 0;
+
+    to_env->env_ipc_recving = false;
     to_env->env_ipc_from = curenv->env_id;
     to_env->env_ipc_value = value;
     to_env->env_status = ENV_RUNNABLE;
@@ -387,19 +416,28 @@ sys_ipc_try_send(envid_t envid, uint32_t value, uintptr_t srcva, size_t size, in
 static int
 sys_ipc_recv(uintptr_t dstva, uintptr_t maxsize) {
     // LAB 9: Your code here
-    if (dstva < MAX_USER_ADDRESS && PAGE_OFFSET(dstva))
+    if (dstva < MAX_USER_ADDRESS && PAGE_OFFSET(dstva)) {
+        cprintf("ERROR:%s: dstva < MAX_USER_ADDRESS but dstva is not page-aligned\n", __func__);
         return -E_INVAL;
-    if (dstva < MAX_USER_ADDRESS && maxsize == 0)
+    }
+
+    if (dstva < MAX_USER_ADDRESS && maxsize == 0) {
+        cprintf("ERROR:%s: dstva is valid and maxsize is 0\n", __func__);
         return -E_INVAL;
-    if (PAGE_OFFSET(maxsize))
+    }
+
+    if (PAGE_OFFSET(maxsize)) {
+        cprintf("ERROR:%s: maxsize is not page aligned\n", __func__);
         return -E_INVAL;
-    curenv->env_ipc_recving = 1;
+    }
+
+    curenv->env_ipc_recving = true;
 
     if (dstva < MAX_USER_ADDRESS) {
         curenv->env_ipc_dstva = dstva;
         curenv->env_ipc_maxsz = maxsize;
     }
- 
+
     curenv->env_status = ENV_NOT_RUNNABLE;
     curenv->env_tf.tf_regs.reg_rax = 0;
     sched_yield();
@@ -421,6 +459,7 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
 
     // LAB 8: Your code here
     // LAB 9: Your code here
+
     if (syscallno == SYS_cputs) {
         return sys_cputs((const char *)a1, (size_t)a2);
     } else if (syscallno == SYS_cgetc) {
@@ -432,9 +471,9 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
     } else if (syscallno == SYS_alloc_region) {
         return sys_alloc_region((envid_t)a1, a2, (size_t)a3, (int)a4);
     } else if (syscallno == SYS_map_region) {
-        return sys_map_region((envid_t) a1, a2,(envid_t)a3, a4, (size_t)a5, (int)a6);
+        return sys_map_region((envid_t)a1, a2, (envid_t)a3, a4, (size_t)a5, (int)a6);
     } else if (syscallno == SYS_unmap_region) {
-        return sys_unmap_region((envid_t) a1, a2,(size_t)a3);
+        return sys_unmap_region((envid_t)a1, a2, (size_t)a3);
     } else if (syscallno == SYS_region_refs) {
         return sys_region_refs(a1, (size_t)a2, a3, a4);
     } else if (syscallno == SYS_exofork) {
@@ -442,12 +481,12 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
     } else if (syscallno == SYS_env_set_status) {
         return sys_env_set_status((envid_t)a1, (int)a2);
     } else if (syscallno == SYS_env_set_pgfault_upcall) {
-        return sys_env_set_pgfault_upcall((envid_t) a1, (void *)a2);
+        return sys_env_set_pgfault_upcall((envid_t)a1, (void*)a2);
     } else if (syscallno == SYS_yield) {
         sys_yield();
         return 0;
     } else if (syscallno == SYS_ipc_try_send) {
-        return sys_ipc_try_send((envid_t)a1, (uint32_t)a2, a3,(size_t)a4,(int)a5);
+        return sys_ipc_try_send((envid_t)a1, (uint32_t)a2, a3, (size_t)a4, (int)a5);
     } else if (syscallno == SYS_ipc_recv) {
         return sys_ipc_recv(a1, a2);
     }

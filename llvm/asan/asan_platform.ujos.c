@@ -68,15 +68,29 @@ platform_abort() {
 static bool
 asan_shadow_allocator(struct UTrapframe *utf) {
     // LAB 9: Your code here
-    if (SHADOW_FOR_ADDRESS(utf->utf_fault_va) >= asan_internal_shadow_start &&
-        SHADOW_FOR_ADDRESS(utf->utf_fault_va) <= asan_internal_shadow_end && !(utf->utf_fault_va >= asan_internal_shadow_start &&
-        utf->utf_fault_va <= asan_internal_shadow_end)) {
-            if (sys_alloc_region(sys_getenvid(), SHADOW_FOR_ADDRESS(utf->utf_fault_va), PAGE_SIZE, ALLOC_ONE | PROT_RW) < 0)
-                return 0;
-            return 1;
-        }
-    return 0;
+
+    assert(utf);
+
+    uint64_t fault_va = utf->utf_fault_va;
+    if (!((uintptr_t)asan_internal_shadow_start < fault_va && fault_va < (uintptr_t)asan_internal_shadow_end)) {
+        return false;
+    }
+    if ((uint8_t *)fault_va >= SHADOW_FOR_ADDRESS((uintptr_t)(asan_internal_shadow_start)) &&
+        (uint8_t *)fault_va <= SHADOW_FOR_ADDRESS((uintptr_t)(asan_internal_shadow_end))) {
+        // Call user-level panic-function.
+        _panic("UASAN", __LINE__, "Shadow self dereferencing");
+    }
+
+    uintptr_t shadow = ROUNDDOWN(fault_va, SHADOW_STEP);
+    int res = sys_alloc_region(CURENVID, (void *)shadow, SHADOW_STEP, PROT_RW | ALLOC_ONE);
+    if (res != 0) {
+        cprintf("sys_alloc_region: %i\n", res);
+        return false;
+    }
+
+    return true;
 }
+
 #endif
 
 

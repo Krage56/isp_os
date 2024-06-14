@@ -46,7 +46,6 @@ save_trapframe_syscall:
 
 save_trapframe:
     cli
-    
     orl $FL_IF, saved_rflags(%rip)
 
     # We already pushed ss,rsp,rflags,cs,rip

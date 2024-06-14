@@ -570,9 +570,11 @@ address_by_fname(const struct Dwarf_Addrs *addrs, const char *fname, uintptr_t *
                      * Attribute value can be obtained using dwarf_read_abbrev_entry function. */
                     // LAB 3: Your code here:
                     uintptr_t low_pc = 0;
+
                     do {
                         abbrev_entry += dwarf_read_uleb128(abbrev_entry, &name);
                         abbrev_entry += dwarf_read_uleb128(abbrev_entry, &form);
+
                         if (name == DW_AT_low_pc) {
                             entry += dwarf_read_abbrev_entry(entry, form, &low_pc, sizeof(low_pc), address_size);
                         } else {
@@ -580,7 +582,10 @@ address_by_fname(const struct Dwarf_Addrs *addrs, const char *fname, uintptr_t *
                         }
                     } while (name || form);
 
-                    *offset = low_pc;
+                    if (low_pc) {
+                        *offset = low_pc;
+                        return 0;
+                    }
                 } else {
                     /* Skip if not a subprogram or label */
                     do {

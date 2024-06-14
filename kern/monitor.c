@@ -17,7 +17,6 @@
 #include <kern/env.h>
 #include <kern/pmap.h>
 #include <kern/trap.h>
-#include <kern/monitor.h>
 
 #define WHITESPACE "\t\r\n "
 #define MAXARGS    16
@@ -26,6 +25,7 @@
 int mon_help(int argc, char **argv, struct Trapframe *tf);
 int mon_kerninfo(int argc, char **argv, struct Trapframe *tf);
 int mon_backtrace(int argc, char **argv, struct Trapframe *tf);
+int mon_greet(int argc, char **argv, struct Trapframe *tf);
 int mon_dumpcmos(int argc, char **argv, struct Trapframe *tf);
 int mon_start(int argc, char **argv, struct Trapframe *tf);
 int mon_stop(int argc, char **argv, struct Trapframe *tf);
@@ -45,6 +45,7 @@ static struct Command commands[] = {
         {"help", "Display this list of commands", mon_help},
         {"kerninfo", "Display information about the kernel", mon_kerninfo},
         {"backtrace", "Print stack backtrace", mon_backtrace},
+        {"greet", "Print greeting message", mon_greet},
         {"dumpcmos", "Display CMOS contents", mon_dumpcmos},
         {"timer_start", "Start timer", mon_start},
         {"timer_stop", "Stop timer", mon_stop},
@@ -81,29 +82,23 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf) {
 int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf) {
     // LAB 2: Your code here
-    uint64_t rbp = 0x0;
-    uint64_t rip = 0x0;
-    struct Ripdebuginfo debug_info;
-    rbp = read_rbp();
-    rip = (uint64_t) * ((uint64_t *)rbp + 1);
-    do {
+    uint64_t rbp = read_rbp();
+    uint64_t rip = (uint64_t) * ((uint64_t *)rbp + 1);
+    cprintf("Stack backtrace:\n");
+    struct Ripdebuginfo info = {};
+    while (rbp != 0) {
         cprintf("  rbp %016lx  rip %016lx\n", rbp, rip);
-
-        debuginfo_rip((uintptr_t)rip, (struct Ripdebuginfo *)&debug_info);
-        cprintf("         %s:%d: %s+%lu\n",
-                debug_info.rip_file, debug_info.rip_line, debug_info.rip_fn_name,
-                rip - debug_info.rip_fn_addr);
+        debuginfo_rip((uintptr_t)rip, &info);
+        cprintf("    %s:%d: %s+%d\n", info.rip_file, info.rip_line, info.rip_fn_name, info.rip_fn_namelen);
         rbp = (uint64_t) * (uint64_t *)rbp;
         rip = (uint64_t) * ((uint64_t *)rbp + 1);
-    } while (rbp);
-
+    }
     return 0;
 }
 
 int
-mon_test(int argc, char **argv, struct Trapframe *tf) {
-    cprintf("We will die\n");
-
+mon_greet(int argc, char **argv, struct Trapframe *tf) {
+    cprintf("Hello!\n");
     return 0;
 }
 
@@ -113,10 +108,9 @@ mon_test(int argc, char **argv, struct Trapframe *tf) {
 int
 mon_start(int argc, char **argv, struct Trapframe *tf) {
     if (argc != 2) {
-		return 1;
-	}
-	timer_start(argv[1]);
-
+        return 1;
+    }
+    timer_start(argv[1]);
     return 0;
 }
 
@@ -132,9 +126,9 @@ mon_stop(int argc, char **argv, struct Trapframe *tf) {
 int
 mon_frequency(int argc, char **argv, struct Trapframe *tf) {
     if (argc != 2) {
-		return 1;
-	}
-	timer_cpu_frequency(argv[1]);
+        return 1;
+    }
+    timer_cpu_frequency(argv[1]);
     return 0;
 }
 
@@ -171,16 +165,15 @@ mon_dumpcmos(int argc, char **argv, struct Trapframe *tf) {
     // Make sure you understand the values read.
     // Hint: Use cmos_read8()/cmos_write8() functions.
     // LAB 4: Your code here
-    uint8_t i;
     cprintf("00: ");
-    for (i = 0; i < CMOS_SIZE; i++) {
-		if (i % 16 == 0 && i > 0) {
-			cprintf("\n%02X: ", i);
-		}
-		cprintf("%02X ", cmos_read8(i));
-	}
-	cprintf("\n");
-    
+    for (uint8_t i = 0; i < CMOS_SIZE; ++i) {
+        if (i > 0 && i % 16 == 0) {
+            cprintf("\n%02X: ", i);
+        }
+        cprintf("%02X ", cmos_read8(i));
+    }
+    cprintf("\n");
+
     return 0;
 }
 
