@@ -57,39 +57,33 @@ is_page_present(void *va) {
 
 int
 foreach_shared_region(int (*fun)(void *start, void *end, void *arg), void *arg) {
-    /* Calls fun() for every shared region */
+    /* Calls fun() for every shared region.
+     * NOTE: Skip over larger pages/page directories for efficiency */
+    // LAB 11: Your code here:
 
     int res = 0;
-    for (size_t i = 0; i < MAX_USER_ADDRESS; i += PAGE_SIZE) {
-        if (!(uvpml4[VPML4(i)] & PTE_P)) {
-            i += HUGE_PAGE_SIZE * PD_ENTRY_COUNT * PDP_ENTRY_COUNT - PAGE_SIZE;
+    (void)fun, (void)arg;
+
+    assert(fun);
+
+    for (uintptr_t i = 0; i < MAX_USER_ADDRESS; i += (1LL << PML4_SHIFT)) 
+    {
+        if (!(uvpml4[VPML4(i)] & PTE_P)) 
             continue;
-        }
-        if (!(uvpdp[VPDP(i)] & PTE_P)) {
-            i += HUGE_PAGE_SIZE * PD_ENTRY_COUNT - PAGE_SIZE;
-            continue;
-        } else if (uvpdp[VPDP(i)] & PTE_PS) {
-            if ((uvpdp[VPDP(i)] & (PTE_SHARE | PTE_P)) == (PTE_SHARE | PTE_P)) {
-                res = fun((void *)i, (void *)(i + HUGE_PAGE_SIZE * PD_ENTRY_COUNT), arg);
-                if (res < 0) break;
+        for (uintptr_t j = i; j < i + (1LL << PML4_SHIFT); j += (1LL << PDP_SHIFT)) 
+        {
+            if (!(uvpdp[VPDP(j)] & PTE_P)) 
+                continue;
+            for (uintptr_t k = j; k < j + (1LL << PDP_SHIFT); k += (1LL << PD_SHIFT)) 
+            {
+                if (!(uvpd[VPD(k)] & PTE_P)) 
+                    continue;
+                for (uintptr_t addr = k; addr < k + (1LL << PD_SHIFT); addr += (1LL << PT_SHIFT)) 
+                {
+                    if (uvpt[VPT(addr)] & PTE_P && uvpt[VPT(addr)] & PTE_SHARE)
+                        res = fun((void *)addr, (void *)(addr + PAGE_SIZE), arg);
+                }
             }
-            i += HUGE_PAGE_SIZE * PD_ENTRY_COUNT - PAGE_SIZE;
-            continue;
-        }
-        if (!(uvpd[VPD(i)] & PTE_P)) {
-            i += HUGE_PAGE_SIZE - PAGE_SIZE;
-            continue;
-        } else if (uvpd[VPD(i)] & PTE_PS) {
-            if ((uvpd[VPD(i)] & (PTE_SHARE | PTE_P)) == (PTE_SHARE | PTE_P)) {
-                res = fun((void *)i, (void *)(i + HUGE_PAGE_SIZE), arg);
-                if (res < 0) break;
-            }
-            i += HUGE_PAGE_SIZE - PAGE_SIZE;
-            continue;
-        }
-        if ((uvpt[VPT(i)] & (PTE_P | PTE_SHARE)) == (PTE_P | PTE_SHARE)) {
-            res = fun((void *)i, (void *)(i + PAGE_SIZE), arg);
-            if (res < 0) break;
         }
     }
 

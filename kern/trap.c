@@ -143,9 +143,11 @@ trap_init(void) {
     idt[T_FPERR] = GATE(0, GD_KT, (uint64_t)&fperr_thdlr, 0);
 
     idt[T_SYSCALL] = GATE(0, GD_KT, (uint64_t)&syscall_thdlr, 3);
-
-    idt[IRQ_OFFSET + IRQ_KBD] = GATE(0, GD_KT, (uintptr_t)(&kbd_thdlr), 3);
-    idt[IRQ_OFFSET + IRQ_SERIAL] = GATE(0, GD_KT, (uintptr_t)(&serial_thdlr), 3);
+    
+    // LAB 11: Your code here
+    // check indexes: (IRQ_OFFSET + IRQ_KBD) and (IRQ_OFFSET + IRQ_SERIAL)
+    idt[IRQ_OFFSET + IRQ_KBD] = GATE(0, GD_KT, (uintptr_t)(&kbd_thdlr), 0);
+    idt[IRQ_OFFSET + IRQ_SERIAL] = GATE(0, GD_KT, (uintptr_t)(&serial_thdlr), 0);
 
     /* Setup #PF handler dedicated stack
      * It should be switched on #PF because
@@ -295,6 +297,15 @@ trap_dispatch(struct Trapframe *tf) {
         rtc_check_status();
         pic_send_eoi(IRQ_CLOCK);
         sched_yield();
+        return;
+        // LAB 11: Your code here
+        /* Handle keyboard (IRQ_KBD + kbd_intr()) and
+         * serial (IRQ_SERIAL + serial_intr()) interrupts. */
+    case IRQ_OFFSET + IRQ_KBD:
+        kbd_intr();
+        return;
+    case IRQ_OFFSET + IRQ_SERIAL:
+        serial_intr();
         return;
     default:
         print_trapframe(tf);

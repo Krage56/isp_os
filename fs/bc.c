@@ -35,7 +35,7 @@ bc_pgfault(struct UTrapframe *utf) {
     // LAB 10: Your code here
     int err;
     addr = ROUNDDOWN(addr, BLKSIZE);
-    if ((err = sys_alloc_region(CURENVID, addr, BLKSIZE, PROT_RW)))
+    if ((err = sys_alloc_region(CURENVID, addr, BLKSIZE, PTE_SYSCALL | PROT_SHARE | PROT_RW)))
         panic("bc_pgfault couldn't alloc region: %i", err);
 
     *(char *)addr = 0;
