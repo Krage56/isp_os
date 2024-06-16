@@ -451,6 +451,79 @@ sys_ipc_recv(uintptr_t dstva, uintptr_t maxsize) {
     return 0;
 }
 
+static bool
+has_unsafe_rflags_bits(uint64_t rflags)
+{
+    if (rflags & (FL_IOPL_1 | FL_IOPL_2 | FL_IOPL_3)) {
+        cprintf("Only IOPL 0 is allowed for spawn");
+        return true;
+    }
+    if (rflags & FL_NT) {
+        cprintf("Nested task is not allowed for spawn");
+        return true;
+    }
+    if (rflags & FL_TF) {
+        cprintf("Trap flag is not allowed for spawn");
+        return true;
+    }
+    if (!(rflags & FL_IF)) {
+        cprintf("Interrupt flag must be set for spawn");
+        return true;
+    }
+    return false;
+}
+
+
+/*
+ * This function sets trapframe and is unsafe
+ * so you need:
+ *   -Check environment id to be valid and accessible
+ *   -Check argument to be valid memory
+ *   -Use nosan_memcpy to copy from usespace
+ *   -Prevent privilege escalation by overriding segments
+ *   -Only allow program to set safe flags in RFLAGS register
+ *   -Force IF to be set in RFLAGS
+ */
+static int
+sys_env_set_trapframe(envid_t envid, struct Trapframe *tf) {
+    // LAB 11: Your code here
+    struct Env *env = NULL;
+    int res = envid2env(envid, &env, 0);
+    if (res != 0) {
+        cprintf("sys_ipc_try_send: invalid envid: %d", envid);
+        return res;
+    }
+
+    user_mem_assert(env, tf, sizeof(struct Trapframe), PROT_R);
+
+    // Copy trapframe into kernel, access only the copy.
+    struct Trapframe ktf;
+    nosan_memcpy(&ktf, tf, sizeof(struct Trapframe));
+
+    // Forcibly override segment registers into user mode.
+    ktf.tf_ds = GD_UD | 3;
+    ktf.tf_es = GD_UD | 3;
+    ktf.tf_ss = GD_UD | 3;
+    ktf.tf_cs = GD_UT | 3;
+
+    if (has_unsafe_rflags_bits(ktf.tf_rflags)) {
+        cprintf("Unsafe rflags in spawn: %lx", ktf.tf_rflags);
+        return -E_INVAL;
+    }
+
+    memcpy(&env->env_tf, &ktf, sizeof(struct Trapframe));
+
+    return 0;
+}
+
+/*
+ * This function return the difference between maximal
+ * number of references of regions [addr, addr + size] and [addr2,addr2+size2]
+ * if addr2 is less than MAX_USER_ADDRESS, or just
+ * maximal number of references to [addr, addr + size]
+ *
+ * Use region_maxref() here.
+ */
 static int
 sys_region_refs(uintptr_t addr, size_t size, uintptr_t addr2, uintptr_t size2) {
     // LAB 10: Your code here
@@ -473,6 +546,7 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
     // LAB 8: Your code here
     // LAB 9: Your code here
     // LAB 10: Your code here
+    // LAB 11: Your code here
 
     switch(syscallno)
     {
@@ -524,8 +598,8 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
         case SYS_map_physical_region:
             return (uintptr_t) sys_map_physical_region(a1, (envid_t) a2, a3, (size_t) a4, (int) a5);
 
-        // case SYS_env_set_trapframe:
-        //     return (uintptr_t) sys_env_set_trapframe((envid_t) a1, (struct Trapframe *) a2);
+        case SYS_env_set_trapframe:
+            return (uintptr_t) sys_env_set_trapframe((envid_t) a1, (struct Trapframe *) a2);
 
         default:
             return -E_NO_SYS;
