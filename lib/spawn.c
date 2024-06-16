@@ -280,52 +280,34 @@ map_segment(envid_t child, uintptr_t va, size_t memsz,
     /* NOTE: There's restriction on maximal filesz
      * for each program segment (HUGE_PAGE_SIZE) */
 
-    void *child_target_va = (void *)va;
-    int err = sys_alloc_region(child, child_target_va, memsz, perm | ALLOC_ZERO);
-    if (err != 0) {
-        return err;
-    }
+    for (unsigned ind = 0; ind < memsz; ind += PAGE_SIZE) {
+		if (ind >= filesz) {
+            res = sys_alloc_region(child, (void*) (va + ind), PAGE_SIZE, perm);
+            if (res < 0) 
+                return res;
+		} 
+        else {
+            res = sys_alloc_region(0, UTEMP, PAGE_SIZE, PTE_SYSCALL);
+            if (res < 0) 
+                return res;
 
-    if (filesz == 0) {
-        // No need to do anything else.
-        return 0;
-    }
+            res = seek(fd, fileoffset + ind);
+            if (res < 0) 
+                return res;
 
-    /* Allocate filesz in parent to UTEMP */
+            res = readn(fd, UTEMP, MIN(PAGE_SIZE, filesz - ind));
+            if (res < 0) 
+                return res;
 
-    void *utemp = UTEMP;
-    err = sys_alloc_region(CURENVID, utemp, filesz, PROT_RW);
-    if (err != 0) {
-        return err;
-    }
+            res = sys_map_region(0, UTEMP, child, (void*) va + ind, PAGE_SIZE, perm);
+            if (res < 0) 
+                return res;
 
-    /* seek() fd to fileoffset  */
+            res = sys_unmap_region(0, UTEMP, PAGE_SIZE);
+            if (res < 0) 
+                return res;
+		}
+	}
 
-    err = seek(fd, fileoffset);
-    if (err != 0) {
-        goto error;
-    }
-
-    /* read filesz to UTEMP */
-
-    err = readn(fd, utemp, filesz);
-    if (err < 0 || (size_t)err != filesz) {
-        cprintf("map_segment: file read returned %d, but expected %lu\n", err, filesz);
-        if (err >= 0) {
-            err = -1;
-        }
-        goto error;
-    }
-
-    /* Map read section contents to child */
-
-    err = sys_map_region(CURENVID, utemp, child, child_target_va, filesz, perm | PROT_LAZY);
-    if (err != 0) {
-        goto error;
-    }
-
-    /* Unmap it from parent */
-error:
-    sys_unmap_region(CURENVID, utemp, filesz);
-    return err;
+    return 0;
 }
