@@ -64,5 +64,19 @@ foreach_shared_region(int (*fun)(void *start, void *end, void *arg), void *arg) 
     int res = 0;
     (void)fun, (void)arg;
 
+    assert(fun);
+
+    for (uintptr_t va = 0; va < MAX_USER_ADDRESS; va += PAGE_SIZE) {
+        void *addr = (void *)va;
+        pte_t pt = get_uvpt_entry(addr);
+
+        if (pt & PTE_SHARE) {
+            int res = fun(addr, addr + PAGE_SIZE, arg);
+            if (res < 0) {
+                return res;
+            }
+        }
+    }
+
     return res;
 }

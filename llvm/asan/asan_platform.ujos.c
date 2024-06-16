@@ -68,7 +68,6 @@ platform_abort() {
 static bool
 asan_shadow_allocator(struct UTrapframe *utf) {
     // LAB 9: Your code here
-
     assert(utf);
 
     uint64_t fault_va = utf->utf_fault_va;
@@ -90,7 +89,6 @@ asan_shadow_allocator(struct UTrapframe *utf) {
 
     return true;
 }
-
 #endif
 
 
@@ -138,13 +136,16 @@ platform_asan_init(void) {
     platform_asan_unpoison(&__data_start, &__data_end - &__data_start);
     platform_asan_unpoison(&__rodata_start, &__rodata_end - &__rodata_start);
     platform_asan_unpoison(&__bss_start, &__bss_end - &__bss_start);
+
     /* 2. Stacks (USER_EXCEPTION_STACK_TOP, USER_STACK_TOP) */
     // LAB 8: Your code here
 	platform_asan_unpoison((void *)(USER_EXCEPTION_STACK_TOP - USER_EXCEPTION_STACK_SIZE), USER_EXCEPTION_STACK_SIZE);
     platform_asan_unpoison((void *)(USER_STACK_TOP - USER_STACK_SIZE), USER_STACK_SIZE);
+
     /* 3. Kernel exposed info (UENVS, UVSYS (only for lab 12)) */
     // LAB 8: Your code here
     platform_asan_unpoison((void *)UENVS, UENVS_SIZE);
+
     // TODO NOTE: LAB 12 code may be here
 #if LAB >= 12
     platform_asan_unpoison((void *)UVSYS, NVSYSCALLS * sizeof(int));

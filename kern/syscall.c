@@ -451,6 +451,28 @@ sys_ipc_recv(uintptr_t dstva, uintptr_t maxsize) {
     return 0;
 }
 
+static bool
+has_unsafe_rflags_bits(uint64_t rflags)
+{
+    if (rflags & (FL_IOPL_1 | FL_IOPL_2 | FL_IOPL_3)) {
+        cprintf("Only IOPL 0 is allowed for spawn");
+        return true;
+    }
+    if (rflags & FL_NT) {
+        cprintf("Nested task is not allowed for spawn");
+        return true;
+    }
+    if (rflags & FL_TF) {
+        cprintf("Trap flag is not allowed for spawn");
+        return true;
+    }
+    if (!(rflags & FL_IF)) {
+        cprintf("Interrupt flag must be set for spawn");
+        return true;
+    }
+    return false;
+}
+
 /*
  * This function sets trapframe and is unsafe
  * so you need:
@@ -464,6 +486,31 @@ sys_ipc_recv(uintptr_t dstva, uintptr_t maxsize) {
 static int
 sys_env_set_trapframe(envid_t envid, struct Trapframe *tf) {
     // LAB 11: Your code here
+    struct Env *env = NULL;
+    int res = envid2env(envid, &env, 0);
+    if (res != 0) {
+        cprintf("sys_ipc_try_send: invalid envid: %d", envid);
+        return res;
+    }
+
+    user_mem_assert(env, tf, sizeof(struct Trapframe), PROT_R);
+
+    // Copy trapframe into kernel, access only the copy.
+    struct Trapframe ktf;
+    nosan_memcpy(&ktf, tf, sizeof(struct Trapframe));
+
+    // Forcibly override segment registers into user mode.
+    ktf.tf_ds = GD_UD | 3;
+    ktf.tf_es = GD_UD | 3;
+    ktf.tf_ss = GD_UD | 3;
+    ktf.tf_cs = GD_UT | 3;
+
+    if (has_unsafe_rflags_bits(ktf.tf_rflags)) {
+        cprintf("Unsafe rflags in spawn: %lx", ktf.tf_rflags);
+        return -E_INVAL;
+    }
+
+    memcpy(&env->env_tf, &ktf, sizeof(struct Trapframe));
 
     return 0;
 }
@@ -550,8 +597,8 @@ syscall(uintptr_t syscallno, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t
         case SYS_map_physical_region:
             return (uintptr_t) sys_map_physical_region(a1, (envid_t) a2, a3, (size_t) a4, (int) a5);
 
-        // case SYS_env_set_trapframe:
-        //     return (uintptr_t) sys_env_set_trapframe((envid_t) a1, (struct Trapframe *) a2);
+        case SYS_env_set_trapframe:
+            return (uintptr_t) sys_env_set_trapframe((envid_t) a1, (struct Trapframe *) a2);
 
         default:
             return -E_NO_SYS;
