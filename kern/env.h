@@ -23,6 +23,13 @@ int envid2env(envid_t envid, struct Env **env_store, bool checkperm);
 _Noreturn void env_run(struct Env *e);
 _Noreturn void env_pop_tf(struct Trapframe *tf);
 
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+} Bounds;
+
+static const int Loaded_segments_num = 3;
+
 #ifdef CONFIG_KSPACE
 extern void sys_exit(void);
 extern void sys_yield(void);

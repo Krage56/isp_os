@@ -211,8 +211,9 @@ serve_read(envid_t envid, union Fsipc *ipc) {
     int bytes_cnt = file_read(o->o_file, ret->ret_buf, req->req_n, o->o_fd->fd_offset);
     if (bytes_cnt > 0)
         o->o_fd->fd_offset += bytes_cnt;
+//    file_set_size(o->o_file, 0);
+//     file_free_block(o->o_file, o->o_file->f_indirect);
     return bytes_cnt;
-    return -1;
 }
 
 /* Write req->req_n bytes from req->req_buf to req_fileid, starting at
@@ -226,6 +227,7 @@ serve_write(envid_t envid, union Fsipc *ipc) {
         cprintf("serve_write %08x %08x %08x\n", envid, req->req_fileid, (uint32_t)req->req_n);
 
     // LAB 10: Your code here
+
     struct OpenFile *o;
     int res = openfile_lookup(envid, req->req_fileid, &o);
     if (res < 0) 

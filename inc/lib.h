@@ -99,6 +99,8 @@ int sys_gettime(void);
 
 int vsys_gettime(void);
 
+void sys_monitor(void);
+
 /* This must be inlined. Exercise for reader: why? */
 static inline envid_t __attribute__((always_inline))
 sys_exofork(void) {

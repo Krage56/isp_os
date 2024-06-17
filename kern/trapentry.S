@@ -70,18 +70,20 @@ _alltraps:
     # Complete `struct Trapframe' on stack
     # NOTE: Members after tf_paddind4 already on stack.
     #       For struct PushRegs you can use PUSHA macro.
+
     subq $16,%rsp
     movw %ds,8(%rsp)
     movw %es,(%rsp)
     PUSHA
+
+    # LAB 8: Your code here
+    # Invoke `trap' with a pointer to struct trap as an argument.
+
     movl $GD_KD,%eax
     movw %ax,%ds
     movw %ax,%es
     movq %rsp, %rdi
-
-    # LAB 8: Your code here
-    # Invoke `trap' with a pointer to struct trap as an argument.
-	call trap
+    call trap
 
     jmp .
 
@@ -89,27 +91,32 @@ _alltraps:
 # Use TRAPHANDLER or TRAPHANDLER_NOEC to setup
 # all trap handlers' entry points
 # (Look up their list in inc/trap.h)
-	TRAPHANDLER_NOEC(clock_thdlr, IRQ_OFFSET + IRQ_CLOCK)
-	TRAPHANDLER_NOEC(divide_thdlr, T_DIVIDE)
-	TRAPHANDLER_NOEC(debug_thdlr, T_DEBUG)
-	TRAPHANDLER_NOEC(nmi_thdlr, T_NMI)
-	TRAPHANDLER_NOEC(brkpt_thdlr, T_BRKPT)
-	TRAPHANDLER_NOEC(oflow_thdlr, T_OFLOW)
-	TRAPHANDLER_NOEC(bound_thdlr, T_BOUND)
-	TRAPHANDLER_NOEC(illop_thdlr, T_ILLOP)
-	TRAPHANDLER_NOEC(device_thdlr, T_DEVICE)
-	TRAPHANDLER(dblflt_thdlr, T_DBLFLT)
-	TRAPHANDLER(tss_thdlr, T_TSS)
-	TRAPHANDLER(segnp_thdlr, T_SEGNP)
-	TRAPHANDLER(stack_thdlr, T_STACK)
-	TRAPHANDLER(gpflt_thdlr, T_GPFLT)
-	TRAPHANDLER(pgflt_thdlr, T_PGFLT)
-	TRAPHANDLER_NOEC(fperr_thdlr, T_FPERR)
-	TRAPHANDLER(align_thdlr, T_ALIGN)
-	TRAPHANDLER_NOEC(mchk_thdlr, T_MCHK)
-	TRAPHANDLER_NOEC(simderr_thdlr, T_SIMDERR)
-	TRAPHANDLER_NOEC(syscall_thdlr, T_SYSCALL)
-	TRAPHANDLER_NOEC(kbd_thdlr, IRQ_OFFSET + IRQ_KBD)
-	TRAPHANDLER_NOEC(serial_thdlr, IRQ_OFFSET + IRQ_SERIAL)
+
+TRAPHANDLER_NOEC(divide_thdlr, T_DIVIDE)
+TRAPHANDLER_NOEC(debug_thdlr, T_DEBUG)
+TRAPHANDLER_NOEC(nmi_thdlr, T_NMI)
+TRAPHANDLER_NOEC(brkpt_thdlr, T_BRKPT)
+TRAPHANDLER_NOEC(oflow_thdlr, T_OFLOW)
+TRAPHANDLER_NOEC(bound_thdlr, T_BOUND)
+TRAPHANDLER_NOEC(illop_thdlr, T_ILLOP)
+TRAPHANDLER_NOEC(device_thdlr, T_DEVICE)
+TRAPHANDLER(dblflt_thdlr, T_DBLFLT)
+TRAPHANDLER(tss_thdlr, T_TSS)
+TRAPHANDLER(segnp_thdlr, T_SEGNP)
+TRAPHANDLER(stack_thdlr, T_STACK)
+TRAPHANDLER(gpflt_thdlr, T_GPFLT)
+TRAPHANDLER(pgftl_thdlr, T_PGFLT)
+TRAPHANDLER_NOEC(fperr_thdlr, T_FPERR)
+TRAPHANDLER(align_thdlr, T_ALIGN)
+TRAPHANDLER_NOEC(mchk_thdlr, T_MCHK)
+TRAPHANDLER_NOEC(simderr_thdlr, T_SIMDERR)
+
+TRAPHANDLER_NOEC(syscall_hdlr, T_SYSCALL)
+
+TRAPHANDLER_NOEC(clock_thdlr, IRQ_CLOCK + IRQ_OFFSET)
+TRAPHANDLER_NOEC(timer_thdlr, IRQ_TIMER + IRQ_OFFSET)
+
+TRAPHANDLER_NOEC(kbd_thdlr, IRQ_OFFSET + IRQ_KBD)
+TRAPHANDLER_NOEC(serial_thdlr, IRQ_OFFSET + IRQ_SERIAL)
 
 #endif

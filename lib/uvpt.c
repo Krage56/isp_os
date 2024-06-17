@@ -62,10 +62,6 @@ foreach_shared_region(int (*fun)(void *start, void *end, void *arg), void *arg) 
     // LAB 11: Your code here:
 
     int res = 0;
-    (void)fun, (void)arg;
-
-    assert(fun);
-
     for (uintptr_t i = 0; i < MAX_USER_ADDRESS; i += (1LL << PML4_SHIFT)) 
     {
         if (!(uvpml4[VPML4(i)] & PTE_P)) 
@@ -86,6 +82,5 @@ foreach_shared_region(int (*fun)(void *start, void *end, void *arg), void *arg) 
             }
         }
     }
-
     return res;
 }

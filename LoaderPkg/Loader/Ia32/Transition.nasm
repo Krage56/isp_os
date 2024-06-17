@@ -24,9 +24,9 @@ LINEAR_DATA64_SEL:      equ $ - GDT_BASE
     GDT_DESC 0x92, 0xCF
 
 GDT_DESCRIPTOR:
-    dw 0x28 - 1 ;2 byte 
-    dd GDT_BASE ;4 byte
-    dd 0x0      ;4 byte
+    dw 0x28 - 1 
+    dd GDT_BASE
+    dd 0x0
 
 KERNEL_ENTRY:
     dd 0
@@ -93,33 +93,40 @@ ASM_PFX(CallKernelThroughGateAsm):
 
     ; 1. Disable paging.
     ; LAB 2: Your code here:
-    ; 01111111111111111111111111111111
+
     mov eax, cr0
-    and eax, 0x7FFFFFFF
+    and eax, 0x7fffffff
     mov cr0, eax
 
     ; 2. Switch to our GDT that supports 64-bit mode and update CS to LINEAR_CODE_SEL.
     ; LAB 2: Your code here:
-    lgdt [GDT_DESCRIPTOR]
-    jmp LINEAR_CODE_SEL:AsmWithOurGdt 
+
+    mov eax, GDT_DESCRIPTOR
+    lgdt [eax]
+
+    mov word [esp], LINEAR_CODE_SEL
+    lea eax, [AsmWithOurGdt] ; to continue execute code from needed point
+    push eax
+    jmp far [esp] ; jmp far puts first 4 bites in eip, last 2 bytes in cs. when it is in a PROTECTED mode
+
 
 AsmWithOurGdt:
-
+    pop eax
     ; 3. Reset all the data segment registers to linear mode (LINEAR_DATA_SEL).
     ; LAB 2: Your code here:
+
     mov eax, LINEAR_DATA_SEL
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov gs, ax
-    mov fs, ax
-    ; WTF 16 bits from the LINEAR_DATA_SEL is?
+    mov ds, eax
+    mov es, eax
+    mov fs, eax
+    mov gs, eax
 
     ; 4. Enable PAE/PGE in CR4, which is required to transition to long mode.
     ; This may already be enabled by the firmware but is not guaranteed.
     ; LAB 2: Your code here:
+
     mov eax, cr4
-    or eax, 0xA0
+    or eax, 0xA0 ; PAE -- 5 bit, PGE -- 7 bit
     mov cr4, eax
 
     ; 5. Update page table address register (CR3) right away with the supplied PAGE_TABLE.
@@ -130,36 +137,41 @@ AsmWithOurGdt:
 
     ; 6. Enable long mode (LME) and execute protection (NXE) via the EFER MSR register.
     ; LAB 2: Your code here:
-    mov ecx, 0xC0000080 ; EFER for activation control of long mode and smth else
-                        ; https://wiki.osdev.org/Model_Specific_Registers
-    rdmsr
-    or eax, 0x900       ; Long Mode Enable (LME) - 8th bit is 1
-                        ; NXE Enable - 11th bit is 1
-    wrmsr
+    
+    mov ecx, 0xC0000080
+    rdmsr ; put data from msr to edx:eax
+    or eax, 0x900 ;8 bit -- LME, 11 bit -- NXE
+    wrmsr ; put data from edx:eax to msr
 
     ; 7. Enable paging as it is required in 64-bit mode.
     ; LAB 2: Your code here:
+
     mov eax, cr0
-    or eax, 0x80050002  ; Paging, Monitor co-processor, WP, ALIGN 
+    or eax, 0x80000000
     mov cr0, eax
 
     ; 8. Transition to 64-bit mode by updating CS with LINEAR_CODE64_SEL.
     ; LAB 2: Your code here:
-    ; https://www.nasm.us/xdoc/2.16.01/nasmdoc.pdf - 5.3 __?BITS?__: Current Code Generation Mode
-    jmp LINEAR_CODE64_SEL:AsmInLongMode
+
+    mov word [esp], LINEAR_CODE64_SEL
+    lea eax, [AsmInLongMode] ; to continue execute code from needed point
+    push eax
+    jmp far [esp] ; jmp far puts first 4 bites in eip, last 2 bytes in cs. when it is in a PROTECTED mode
+
 
 AsmInLongMode:
+    pop eax
     BITS 64
 
     ; 9. Reset all the data segment registers to linear 64-bit mode (LINEAR_DATA64_SEL).
     ; LAB 2: Your code here:
+
     mov eax, LINEAR_DATA64_SEL
     mov ds, eax
     mov es, eax
-    mov ss, eax
-    mov gs, eax
     mov fs, eax
-    
+    mov gs, eax
+
     ; 10. Jump to the kernel code.
     mov ecx, [REL LOADER_PARAMS]
     mov ebx, [REL KERNEL_ENTRY]

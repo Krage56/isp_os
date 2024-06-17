@@ -81,6 +81,11 @@ typedef struct {
     uint8_t page_protection;
 } HPET;
 
+typedef struct {
+    ACPISDTHeader h;
+    uint64_t PointerToOtherSDT[];
+} XSDT;
+
 #define HPET_LEG_RT_CAP         (1 << 15)
 #define HPET_LEG_RT_CNF         (1 << 1)
 #define HPET_ENABLE_CNF         (1 << 0)
@@ -170,6 +175,10 @@ typedef struct {
     uint8_t Reserved3[3];
 } FADT;
 
+
+#define ACPI_FADT_FLAG_TMR_VAL_EXT (1 << 8)
+#define ACPI_PM1A_ST_REG_TMR_STS   (1 << 0)
+
 /* Configuration Space Base Address Allocation */
 typedef struct {
     uint64_t BaseAddress;
@@ -191,6 +200,12 @@ void acpi_enable(void);
 RSDP *get_rsdp(void);
 FADT *get_fadt(void);
 HPET *get_hpet(void);
+XSDT* get_xsdt(RSDP* rsdp);
+
+static const char RSDP_sign[8] = "RSD PTR ";
+static const char HPET_sign[4] = "HPET";
+static const char XSDT_sign[4] = "XSDT";
+static const char FADT_sign[4] = "FACP";
 
 void hpet_print_struct(void);
 void hpet_init(void);

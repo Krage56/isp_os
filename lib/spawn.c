@@ -280,13 +280,23 @@ map_segment(envid_t child, uintptr_t va, size_t memsz,
     /* NOTE: There's restriction on maximal filesz
      * for each program segment (HUGE_PAGE_SIZE) */
 
-    for (unsigned ind = 0; ind < memsz; ind += PAGE_SIZE) {
-		if (ind >= filesz) {
+    /* Allocate filesz - memsz in child */
+    /* Allocate filesz in parent to UTEMP */
+    /* seek() fd to fileoffset  */
+    /* read filesz to UTEMP */
+    /* Map read section conents to child */
+    /* Unmap it from parent */
+
+    for (unsigned ind = 0; ind < memsz; ind += PAGE_SIZE) 
+    {
+		if (ind >= filesz) 
+        {
             res = sys_alloc_region(child, (void*) (va + ind), PAGE_SIZE, perm);
             if (res < 0) 
                 return res;
 		} 
-        else {
+        else 
+        {
             res = sys_alloc_region(0, UTEMP, PAGE_SIZE, PTE_SYSCALL);
             if (res < 0) 
                 return res;

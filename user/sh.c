@@ -49,13 +49,15 @@ again:
              * then close the original 'fd'. */
 
             // LAB 11: Your code here
-           if ((fd = open(t, O_RDONLY | O_CREAT)) < 0) {
+            if ((fd = open(t, O_RDONLY)) < 0)
+            {
                 cprintf("open %s for read: %i", t, fd);
                 exit();
             }
-            const int stdin = 0;
-            if (fd != stdin) {
-                dup(fd, stdin);
+
+            if (fd != 0)
+            {
+                dup(fd, 0);
                 close(fd);
             }
             break;

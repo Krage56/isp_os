@@ -155,3 +155,8 @@ int
 sys_gettime(void) {
     return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0, 0);
 }
+
+void
+sys_monitor(void) {
+    syscall(SYS_monitor, 0, 0, 0, 0, 0, 0, 0);
+}
