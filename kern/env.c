@@ -98,7 +98,15 @@ env_init(void) {
      * Don't forget about rounding.
      * kzalloc_region only works with current_space != NULL */
     // LAB 12: Your code here
+    size_t uvsys_size = ROUNDUP(sizeof(int) * NVSYSCALLS, PAGE_SIZE);
+    void* uvsys_mem = kzalloc_region(uvsys_size);
+    assert(uvsys_mem != NULL);
 
+    int res = map_region(&kspace, UVSYS, &kspace, (uintptr_t) uvsys_mem, uvsys_size, PROT_R | PROT_USER_);
+    if (res < 0)
+        panic("env_init: %i\n", res);
+
+    vsys = (volatile int*) uvsys_mem;
     /* Allocate envs array with kzalloc_region().
      * Don't forget about rounding.
      * kzalloc_region() only works with current_space != NULL */

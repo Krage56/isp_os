@@ -190,8 +190,9 @@ dir_lookup(struct File *dir, const char *name, struct File **file) {
     for (blockno_t i = 0; i < nblock; i++) {
         char *blk;
         int res = file_get_block(dir, i, &blk);
-        if (res < 0) return res;
-
+        if (res < 0) {
+            return -E_NOT_FOUND;
+        }
         struct File *f = (struct File *)blk;
         for (blockno_t j = 0; j < BLKFILES; j++)
             if (strcmp(f[j].f_name, name) == 0) {

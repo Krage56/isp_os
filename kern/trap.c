@@ -295,9 +295,9 @@ trap_dispatch(struct Trapframe *tf) {
         // LAB 4: Your code here
         // LAB 5: Your code here
         // LAB 12: Your code here
+        assert(timer_for_schedule);
         timer_for_schedule->handle_interrupts();
-        rtc_check_status();
-        pic_send_eoi(IRQ_CLOCK);
+        vsys[VSYS_gettime] = gettime();
         sched_yield();
         return;
         // LAB 11: Your code here
