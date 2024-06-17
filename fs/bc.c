@@ -30,18 +30,19 @@ bc_pgfault(struct UTrapframe *utf) {
 
     /* Allocate a page in the disk map region, read the contents
      * of the block from the disk into that page.
-     * Hint: first round addr to page boundary. fs/nvme.c has code to read
+     * Hint: first round addr to page boundary. fs/ide.c has code to read
      * the disk. */
     // LAB 10: Your code here
     int err;
     addr = ROUNDDOWN(addr, BLKSIZE);
-    if ((err = sys_alloc_region(CURENVID, addr, BLKSIZE, PTE_SYSCALL | PROT_SHARE | PROT_RW)))
+    if ((err = sys_alloc_region(CURENVID, addr, BLKSIZE, PROT_RW)))
         panic("bc_pgfault couldn't alloc region: %i", err);
 
     *(char *)addr = 0;
 
     if ((err = nvme_read(blockno * BLKSECTS, addr, BLKSECTS)))
         panic("bc_pgfault couldn't read the block: %i", err);
+
     return 1;
 }
 
@@ -49,13 +50,12 @@ bc_pgfault(struct UTrapframe *utf) {
  * necessary, then clear the PTE_D bit using sys_map_region().
  * If the block is not in the block cache or is not dirty, does
  * nothing.
- * Hint: Use is_page_present(), is_page_dirty(), and nvme_write().
+ * Hint: Use is_page_present(), is_page_dirty(), and ide_write().
  * Hint: Use the PTE_SYSCALL constant when calling sys_map_region().
  * Hint: Don't forget to round addr down. */
 void
 flush_block(void *addr) {
     blockno_t blockno = ((uintptr_t)addr - (uintptr_t)DISKMAP) / BLKSIZE;
-    int res;
 
     if (addr < (void *)(uintptr_t)DISKMAP || addr >= (void *)(uintptr_t)(DISKMAP + DISKSIZE))
         panic("flush_block of bad va %p", addr);
@@ -64,6 +64,7 @@ flush_block(void *addr) {
 
     // LAB 10: Your code here.
     addr = ROUNDDOWN(addr, BLKSIZE);
+    int res;
     if (!is_page_present(addr) || !is_page_dirty(addr))
         return;
 

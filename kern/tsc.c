@@ -3,6 +3,7 @@
 #include <inc/x86.h>
 #include <inc/stdio.h>
 #include <inc/string.h>
+#include <inc/assert.h>
 
 #include <kern/tsc.h>
 #include <kern/timer.h>
@@ -192,11 +193,77 @@ print_timer_error(void) {
  * Use print_timer_error function to print error. */
 
 // LAB 5: Your code here:
+// LAB 5: Your code here:
 
 static bool timer_started = 0;
 static int timer_id = -1;
 static uint64_t timer = 0;
 static uint64_t freq = 0;
+
+/* Enum value corresponds to index in timertab array. */
+enum TimerType {
+    RTC,
+    PIT,
+    PM,
+    HPET0,
+    HPET1,
+    UNDEF,
+};
+
+static enum TimerType
+get_timer_type(const char *name) {
+    assert(name);
+
+    if (strncmp(name, "hpet0", sizeof("hpet0")) == 0)
+        return HPET0;
+    if (strncmp(name, "hpet1", sizeof("hpet1")) == 0)
+        return HPET1;
+    if (strncmp(name, "pit", sizeof("pit")) == 0)
+        return PIT;
+    if (strncmp(name, "pm", sizeof("pm")) == 0)
+        return PM;
+    if (strncmp(name, "rtc", sizeof("rtc")) == 0)
+        return RTC;
+    return UNDEF;
+}
+
+static bool
+valid_timer_name(const char *name) {
+    if (!name) {
+        cprintf("Invalid timer.\n");
+        return false;
+    }
+    return true;
+}
+
+static bool
+supported_timer_type(enum TimerType type) {
+    switch (type) {
+    case RTC:
+        cprintf("Can't use RTC for this.\n");
+        return false;
+    case UNDEF:
+        cprintf("Unsupported timer type.\n");
+        return false;
+    default:
+        return true;
+    }
+}
+
+static uint64_t
+get_cpu_frequency(enum TimerType type) {
+    switch (type) {
+    case HPET0:
+    case HPET1:
+    case PIT:
+    case PM:
+        return timertab[type].get_cpu_freq();
+    default:
+        if (supported_timer_type(type))
+          assert(false);
+        return 0;
+    }
+}
 
 void
 timer_start(const char *name) {
@@ -219,13 +286,17 @@ timer_stop(void) {
         print_timer_error();
         return;
     }
-    timer_started = 0;
-    if (timer_id < 0) {
-        print_timer_error();
-        return;
-    }
+
+    uint64_t tsc = read_tsc();
+    uint64_t ticks = tsc - timer;
+
+    freq = get_cpu_frequency(timer_id);
+    uint64_t time = ticks / freq;
+
+    cprintf("%ld\n", time);
+
+    timer_started = false;
     timer_id = -1;
-    print_time((read_tsc() - timer) / freq);
 }
 
 void

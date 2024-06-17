@@ -24,8 +24,8 @@
 /* Functions implementing monitor commands */
 int mon_help(int argc, char **argv, struct Trapframe *tf);
 int mon_kerninfo(int argc, char **argv, struct Trapframe *tf);
+int mon_echo(int argc, char **argv, struct Trapframe *tf);
 int mon_backtrace(int argc, char **argv, struct Trapframe *tf);
-int mon_greet(int argc, char **argv, struct Trapframe *tf);
 int mon_dumpcmos(int argc, char **argv, struct Trapframe *tf);
 int mon_start(int argc, char **argv, struct Trapframe *tf);
 int mon_stop(int argc, char **argv, struct Trapframe *tf);
@@ -44,8 +44,8 @@ struct Command {
 static struct Command commands[] = {
         {"help", "Display this list of commands", mon_help},
         {"kerninfo", "Display information about the kernel", mon_kerninfo},
+        {"echo", "Display input text", mon_echo},
         {"backtrace", "Print stack backtrace", mon_backtrace},
-        {"greet", "Print greeting message", mon_greet},
         {"dumpcmos", "Display CMOS contents", mon_dumpcmos},
         {"timer_start", "Start timer", mon_start},
         {"timer_stop", "Stop timer", mon_stop},
@@ -81,24 +81,43 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf) {
 
 int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf) {
-    // LAB 2: Your code here
-    uint64_t rbp = read_rbp();
-    uint64_t rip = (uint64_t) * ((uint64_t *)rbp + 1);
     cprintf("Stack backtrace:\n");
-    struct Ripdebuginfo info = {};
-    while (rbp != 0) {
-        cprintf("  rbp %016lx  rip %016lx\n", rbp, rip);
-        debuginfo_rip((uintptr_t)rip, &info);
-        cprintf("    %s:%d: %s+%d\n", info.rip_file, info.rip_line, info.rip_fn_name, info.rip_fn_namelen);
-        rbp = (uint64_t) * (uint64_t *)rbp;
-        rip = (uint64_t) * ((uint64_t *)rbp + 1);
+
+    uint64_t rbp = tf->tf_regs.reg_rbp;
+    if (tf == NULL) {
+        rbp = read_rbp();
     }
+
+    struct Ripdebuginfo info;
+    while (rbp != 0) {
+        // rip is placed before the start of frame
+        uint64_t rip = *(uint64_t*)(rbp + 8);
+        cprintf("  rbp %016lx  rip %016lx\n", rbp, rip);
+
+        debuginfo_rip(rip, &info);
+
+        cprintf("    %s:%d: %s+%lu\n",
+                info.rip_file,
+                info.rip_line,
+                info.rip_fn_name,
+                (rip - info.rip_fn_addr));
+
+        // load the saved start of previous frame
+        rbp = *(uint64_t*)rbp;
+    }
+
     return 0;
 }
 
 int
-mon_greet(int argc, char **argv, struct Trapframe *tf) {
-    cprintf("Hello!\n");
+mon_echo(int argc, char **argv, struct Trapframe *tf) {
+    for (int i = 1; i < argc; i++)
+    {
+        if (i + 1 == argc)
+            cprintf("%s\n", argv[i]);
+        else
+            cprintf("%s ", argv[i]);
+    }
     return 0;
 }
 
@@ -145,14 +164,14 @@ mon_memory(int argc, char **argv, struct Trapframe *tf) {
 int
 mon_pagetable(int argc, char **argv, struct Trapframe *tf) {
     // LAB 7: Your code here
-    dump_page_table(current_space->pml4);
+    dump_page_table(KADDR(rcr3()));
     return 0;
 }
 
 int
 mon_virt(int argc, char **argv, struct Trapframe *tf) {
     // LAB 7: Your code here
-    dump_virtual_tree(current_space->root, current_space->root->class);
+    dump_virtual_tree(current_space->root, MAX_CLASS);
     return 0;
 }
 
@@ -165,12 +184,20 @@ mon_dumpcmos(int argc, char **argv, struct Trapframe *tf) {
     // Make sure you understand the values read.
     // Hint: Use cmos_read8()/cmos_write8() functions.
     // LAB 4: Your code here
-    cprintf("00: ");
-    for (uint8_t i = 0; i < CMOS_SIZE; ++i) {
-        if (i > 0 && i % 16 == 0) {
-            cprintf("\n%02X: ", i);
+    uint8_t res;
+    for (int ptr = 0; ptr < CMOS_SIZE; ptr++)
+    {
+        outb(CMOS_CMD, ptr);
+        res = inb(CMOS_DATA);
+
+        if (ptr % 16 == 0)
+        {
+            if (ptr != 0)
+                cprintf("\n");
+            
+            cprintf("%02x: ", ptr);
         }
-        cprintf("%02X ", cmos_read8(i));
+        cprintf("%02x ", res);
     }
     cprintf("\n");
 
